@@ -10,6 +10,11 @@ let state = {
 let syncInterval = null;
 const SYNC_FREQUENCY_MS = 1800000; // 30 minutes
 
+// Leaflet Map state variables
+let map = null;
+let markersGroup = null;
+let currentView = 'grid'; // 'grid' or 'map'
+
 // Initialize the Application
 document.addEventListener('DOMContentLoaded', () => {
     loadState();
@@ -92,8 +97,15 @@ function setupEventListeners() {
     document.getElementById('globalSyncBtn').addEventListener('click', syncAllAgents);
     document.getElementById('clearLogsBtn').addEventListener('click', clearLogs);
     
+    // Layout view switcher
+    const viewGridBtn = document.getElementById('viewGridBtn');
+    const viewMapBtn = document.getElementById('viewMapBtn');
+    
+    viewGridBtn.addEventListener('click', () => toggleView('grid'));
+    viewMapBtn.addEventListener('click', () => toggleView('map'));
+    
     // Filter Tabs
-    const filterTabs = document.querySelectorAll('.filter-tab');
+    const filterTabs = document.querySelectorAll('.filter-tab[data-filter]');
     filterTabs.forEach(tab => {
         tab.addEventListener('click', (e) => {
             filterTabs.forEach(t => t.classList.remove('active'));
@@ -588,11 +600,156 @@ function clearLogs() {
 // RENDER PROCEDURES
 
 function renderAll() {
-    const activeFilter = document.querySelector('.filter-tab.active').dataset.filter;
+    // Note: there are two elements with filter-tab active class now because of the view switcher
+    // We select the one with dataset.filter explicitly.
+    const activeFilterTab = document.querySelector('.filter-tab.active[data-filter]');
+    const activeFilter = activeFilterTab ? activeFilterTab.dataset.filter : 'all';
+    
     renderAgentsGrid(activeFilter);
+    updateMapMarkers(activeFilter);
     renderLogs();
     
     document.getElementById('agentCount').textContent = state.agents.length;
+}
+
+// Toggle grid and map layouts
+function toggleView(view) {
+    if (view === currentView) return;
+    currentView = view;
+    
+    const gridBtn = document.getElementById('viewGridBtn');
+    const mapBtn = document.getElementById('viewMapBtn');
+    const gridContainer = document.getElementById('agentsGrid');
+    const mapContainer = document.getElementById('agentsMapContainer');
+    
+    if (view === 'grid') {
+        gridBtn.classList.add('active');
+        mapBtn.classList.remove('active');
+        gridContainer.classList.remove('hidden');
+        mapContainer.classList.add('hidden');
+    } else {
+        mapBtn.classList.add('active');
+        gridBtn.classList.remove('active');
+        gridContainer.classList.add('hidden');
+        mapContainer.classList.remove('hidden');
+        
+        // Lazy initialize the map when toggled first time
+        initMap();
+        
+        // Allow Leaflet to read the newly visible container dimensions
+        setTimeout(() => {
+            if (map) {
+                map.invalidateSize();
+                fitMapBounds();
+            }
+        }, 50);
+    }
+    
+    renderAll();
+}
+
+// Center of South Korea base map using CartoDB Dark Matter tiles
+function initMap() {
+    if (map) return;
+    
+    map = L.map('map', {
+        zoomControl: true,
+        attributionControl: true
+    }).setView([36.2, 127.8], 7);
+    
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 20
+    }).addTo(map);
+    
+    markersGroup = L.layerGroup().addTo(map);
+}
+
+// Zoom map to fit active/rendered agent boundary
+function fitMapBounds() {
+    if (!map || state.agents.length === 0) return;
+    
+    const activeFilterTab = document.querySelector('.filter-tab.active[data-filter]');
+    const activeFilter = activeFilterTab ? activeFilterTab.dataset.filter : 'all';
+    
+    let filteredAgents = [...state.agents];
+    if (activeFilter === 'active') {
+        filteredAgents = filteredAgents.filter(a => a.isActive);
+    } else if (activeFilter === 'paused') {
+        filteredAgents = filteredAgents.filter(a => !a.isActive);
+    }
+    
+    if (filteredAgents.length === 0) return;
+    
+    const bounds = L.latLngBounds(filteredAgents.map(a => [a.latitude, a.longitude]));
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+}
+
+// Update Leaflet map circle markers based on current states
+function updateMapMarkers(filter = 'all') {
+    if (!map || !markersGroup) return;
+    
+    markersGroup.clearLayers();
+    
+    let filteredAgents = [...state.agents];
+    if (filter === 'active') {
+        filteredAgents = filteredAgents.filter(a => a.isActive);
+    } else if (filter === 'paused') {
+        filteredAgents = filteredAgents.filter(a => !a.isActive);
+    }
+    
+    filteredAgents.forEach(agent => {
+        const tempMinVal = agent.weather.tempMin !== null && agent.weather.tempMin !== undefined ? `${agent.weather.tempMin}°C` : '--';
+        const tempMaxVal = agent.weather.tempMax !== null && agent.weather.tempMax !== undefined ? `${agent.weather.tempMax}°C` : '--';
+        const tempVal = agent.weather.tempMin !== null && agent.weather.tempMax !== null ? `${tempMinVal} ~ ${tempMaxVal}` : '--';
+        const windVal = agent.weather.wind !== null && agent.weather.wind !== undefined ? `${agent.weather.wind} m/s` : '--';
+        const rainVal = agent.weather.rain !== null && agent.weather.rain !== undefined ? `${agent.weather.rain} mm` : '--';
+        const seaTempVal = agent.weather.seaTemp !== null && agent.weather.seaTemp !== undefined ? `${agent.weather.seaTemp}°C` : '--';
+        
+        const color = agent.isActive ? '#05ffa1' : '#ff3366';
+        
+        const marker = L.circleMarker([agent.latitude, agent.longitude], {
+            radius: 8,
+            fillColor: color,
+            color: '#ffffff',
+            weight: 1.5,
+            opacity: 0.9,
+            fillOpacity: 0.95
+        });
+        
+        const popupHtml = `
+            <div class="map-popup-card">
+                <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; color: var(--text-primary);">
+                    <span class="status-dot ${agent.isActive ? 'green' : 'red'}" style="width: 8px; height: 8px; display: inline-block; border-radius: 50%;"></span>
+                    ${agent.name}
+                </div>
+                <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">
+                    ${agent.locationName} (${agent.latitude.toFixed(3)}, ${agent.longitude.toFixed(3)})
+                </div>
+                <div style="font-size: 0.78rem; margin-bottom: 8px; font-weight: 500; color: var(--accent-blue);">
+                    Target Date: ${agent.targetDate}
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 0.75rem; margin-bottom: 10px; color: var(--text-secondary);">
+                    <div>🌡️ Air: <span style="font-weight: 600; color: var(--text-primary);">${tempVal}</span></div>
+                    <div>🌧️ Rain: <span style="font-weight: 600; color: var(--text-primary);">${rainVal}</span></div>
+                    <div>💨 Wind: <span style="font-weight: 600; color: var(--text-primary);">${windVal}</span></div>
+                    <div>🌊 Sea: <span style="font-weight: 600; color: var(--accent-emerald);">${seaTempVal}</span></div>
+                </div>
+                <div style="display: flex; gap: 6px; justify-content: flex-end; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; margin-top: 4px;">
+                    <button onclick="syncSingleAgentWeather('${agent.id}')" style="background: rgba(0, 210, 255, 0.1); border: 1px solid var(--accent-blue-glow); color: var(--accent-blue); padding: 3px 8px; border-radius: var(--radius-sm); font-size: 0.72rem; cursor: pointer; border: 1px solid var(--accent-blue-glow);">
+                        Sync
+                    </button>
+                    <button onclick="toggleAgentActive('${agent.id}')" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-primary); padding: 3px 8px; border-radius: var(--radius-sm); font-size: 0.72rem; cursor: pointer; border: 1px solid var(--border-color);">
+                        ${agent.isActive ? 'Pause' : 'Resume'}
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        marker.bindPopup(popupHtml);
+        markersGroup.addLayer(marker);
+    });
 }
 
 // Render active agent cards grid

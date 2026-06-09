@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NimbusShield // Weather Agent Command Center</title>
+    <!-- Google Fonts: Outfit for UI, JetBrains Mono for console logs -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Dashboard Header -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.48 0-.96.06-1.41.17A5.98 5.98 0 0 0 9 7.5C6.1 7.5 3.5 9.5 3.12 12.3A4.5 4.5 0 0 0 4.5 21h13" />
+                        <path d="M12 13v6M9 16l3-3 3 3" />
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>NimbusShield</h1>
+                    <span class="subtitle">Autonomous Weather Monitoring & Dispatch</span>
+                </div>
+            </div>
+            
+            <div class="header-actions">
+                <div class="sync-status">
+                    <span class="status-dot green pulse"></span>
+                    <span class="status-text">All Systems Nominal</span>
+                </div>
+                <button id="globalSyncBtn" class="btn btn-secondary flex-btn">
+                    <svg class="icon-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                    </svg>
+                    Sync Agents
+                </button>
+                <button id="createAgentBtn" class="btn btn-primary flex-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    Deploy Agent
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="app-workspace">
+            <!-- Left Panel: Monitoring Grid -->
+            <section class="workspace-main">
+                <div class="section-header">
+                    <h2>Active Weather Shield Agents (<span id="agentCount">0</span>)</h2>
+                    <div class="filter-bar">
+                        <button class="filter-tab active" data-filter="all">All</button>
+                        <button class="filter-tab" data-filter="active">Active</button>
+                        <button class="filter-tab" data-filter="paused">Paused</button>
+                    </div>
+                </div>
+
+                <div id="agentsGrid" class="agents-grid">
+                    <!-- Agent Cards dynamically inserted here -->
+                    <div class="empty-state" id="emptyState">
+                        <div class="empty-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="12"></line>
+                                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                            </svg>
+                        </div>
+                        <h3>No Shield Agents Deployed</h3>
+                        <p>Deploy weather agents to monitor specific locations and receive real-time alerts when meteorological conditions violate your custom thresholds.</p>
+                        <button id="deployFirstAgentBtn" class="btn btn-primary">Deploy First Agent</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Sidebars (Alarms & Logs) -->
+            <aside class="workspace-sidebar">
+                <!-- Telemetry Log Panel -->
+
+                <!-- Live Agent Logs (Terminal-style) -->
+                <div class="sidebar-card log-panel">
+                    <div class="card-header">
+                        <h3>Telemetry & Operations Log</h3>
+                        <button id="clearLogsBtn" class="btn-text">Clear Console</button>
+                    </div>
+                    <div class="terminal-container">
+                        <div id="terminalLogs" class="terminal-logs">
+                            <span class="log-line system-line">[SYSTEM] Terminal initialized. Waiting for agent deployment...</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- Modal: Deploy Agent -->
+    <div id="agentModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modalTitle">Deploy New Weather Agent</h3>
+                <button id="closeModalBtn" class="btn-close">&times;</button>
+            </div>
+            <form id="agentForm" class="modal-form">
+                <input type="hidden" id="agentId">
+                
+                <!-- Step 1: Search Location -->
+                <div class="form-section">
+                    <label class="form-label">1. Target Location Search (대한민국 내 지역만 가능)</label>
+                    <div class="search-input-wrapper">
+                        <input type="text" id="locationQuery" placeholder="예: 서울, 부산, 제주, 대전...">
+                        <button type="button" id="searchLocationBtn" class="btn btn-secondary">
+                            Search
+                        </button>
+                    </div>
+                    <div id="locationResults" class="location-results-list hidden"></div>
+                    
+                    <div class="manual-coords-toggle">
+                        <button type="button" id="toggleManualCoordsBtn" class="btn-text">원하는 지역이 없나요? 위도/경도 직접 입력하기</button>
+                    </div>
+                    
+                    <div id="manualCoordsForm" class="manual-coords-inputs hidden">
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="manualCoordsInput" class="form-label">위도, 경도 (Latitude, Longitude)</label>
+                            <input type="text" id="manualCoordsInput" placeholder="예: 37.217, 126.275">
+                            <span class="rule-help" style="font-size: 0.72rem; color: var(--text-muted);">형식: 위도, 경도 (예: 37.217, 126.275)</span>
+                        </div>
+                        <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 4px;">
+                            <label for="manualLocName" class="form-label">지역 이름 (Location Name)</label>
+                            <input type="text" id="manualLocName" placeholder="예: 전라남도 고흥군">
+                        </div>
+                        <button type="button" id="applyManualCoordsBtn" class="btn btn-secondary" style="margin-top: 8px; width: 100%;">좌표 적용하기</button>
+                    </div>
+                    
+                    <input type="hidden" id="selectedLat">
+                    <input type="hidden" id="selectedLng">
+                    <input type="hidden" id="selectedName">
+                    <input type="hidden" id="selectedCountry">
+                    <div id="selectedLocationBadge" class="selected-badge hidden">
+                        Selected: <strong id="selectedNameText">None</strong>
+                    </div>
+                </div>
+
+                <!-- Step 2: Agent Customization -->
+                <div class="form-section">
+                    <label for="agentName" class="form-label">2. Code Name</label>
+                    <input type="text" id="agentName" placeholder="e.g. Gotham Wind Sentry" required>
+                </div>
+
+                <!-- Step 3: Target Forecast Date -->
+                <div class="form-section">
+                    <label for="targetDateSelect" class="form-label">3. Target Forecast Date</label>
+                    <select id="targetDateSelect" class="form-select" required>
+                        <!-- Dates populated dynamically in app.js -->
+                    </select>
+                    <span class="section-help">모니터링할 예보 날짜를 선택합니다. (최대 16일 이내)</span>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" id="cancelModalBtn" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" id="submitAgentBtn" class="btn btn-primary" disabled>Deploy Agent</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

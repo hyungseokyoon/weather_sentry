@@ -360,7 +360,7 @@ function handleFormSubmit(e) {
             latitude: lat,
             longitude: lng,
             targetDate,
-            weather: { tempMin: null, tempMax: null, wind: null, rain: null, seaTemp: null },
+            weather: { tempMin: null, tempMax: null, wind: null, rain: null, seaTemp: null, waveHeight: null, wavePeriod: null, waveDirection: null },
             lastChecked: null,
             isActive: true
         };
@@ -374,12 +374,12 @@ function handleFormSubmit(e) {
     document.getElementById('agentModal').classList.remove('active');
 }
 
-// Fetch daily forecast & marine SST for a single agent
+// Fetch daily forecast & marine SST/waves for a single agent
 async function syncAgentWeather(agent) {
     if (!agent.isActive) return;
     
     const forecastUrl = `https://api.open-meteo.com/v1/forecast?latitude=${agent.latitude}&longitude=${agent.longitude}&daily=temperature_2m_max,temperature_2m_min,rain_sum,wind_speed_10m_max&timezone=auto&forecast_days=16&wind_speed_unit=ms`;
-    const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${agent.latitude}&longitude=${agent.longitude}&hourly=sea_surface_temperature&timezone=auto&forecast_days=16`;
+    const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${agent.latitude}&longitude=${agent.longitude}&hourly=sea_surface_temperature,wave_height,wave_period,wave_direction&timezone=auto&forecast_days=16`;
     
     try {
         const [forecastRes, marineRes] = await Promise.all([
@@ -399,6 +399,9 @@ async function syncAgentWeather(agent) {
         let fcRain = null;
         let fcWind = null;
         let avgSST = null;
+        let avgWaveHeight = null;
+        let avgWavePeriod = null;
+        let avgWaveDirection = null;
         
         if (forecastData.daily && forecastData.daily.time) {
             const dateIndex = forecastData.daily.time.indexOf(agent.targetDate);
@@ -410,15 +413,30 @@ async function syncAgentWeather(agent) {
             }
         }
         
-        if (marineData.hourly && marineData.hourly.time && marineData.hourly.sea_surface_temperature) {
+        if (marineData.hourly && marineData.hourly.time) {
             const targetDay = agent.targetDate;
             const hourlyTemps = [];
+            const hourlyHeights = [];
+            const hourlyPeriods = [];
+            const hourlyDirections = [];
             
             for (let i = 0; i < marineData.hourly.time.length; i++) {
                 if (marineData.hourly.time[i].startsWith(targetDay)) {
-                    const temp = marineData.hourly.sea_surface_temperature[i];
-                    if (temp !== null && temp !== undefined) {
-                        hourlyTemps.push(temp);
+                    if (marineData.hourly.sea_surface_temperature) {
+                        const temp = marineData.hourly.sea_surface_temperature[i];
+                        if (temp !== null && temp !== undefined) hourlyTemps.push(temp);
+                    }
+                    if (marineData.hourly.wave_height) {
+                        const height = marineData.hourly.wave_height[i];
+                        if (height !== null && height !== undefined) hourlyHeights.push(height);
+                    }
+                    if (marineData.hourly.wave_period) {
+                        const period = marineData.hourly.wave_period[i];
+                        if (period !== null && period !== undefined) hourlyPeriods.push(period);
+                    }
+                    if (marineData.hourly.wave_direction) {
+                        const dir = marineData.hourly.wave_direction[i];
+                        if (dir !== null && dir !== undefined) hourlyDirections.push(dir);
                     }
                 }
             }
@@ -426,6 +444,18 @@ async function syncAgentWeather(agent) {
             if (hourlyTemps.length > 0) {
                 const sum = hourlyTemps.reduce((a, b) => a + b, 0);
                 avgSST = parseFloat((sum / hourlyTemps.length).toFixed(1));
+            }
+            if (hourlyHeights.length > 0) {
+                const sum = hourlyHeights.reduce((a, b) => a + b, 0);
+                avgWaveHeight = parseFloat((sum / hourlyHeights.length).toFixed(2));
+            }
+            if (hourlyPeriods.length > 0) {
+                const sum = hourlyPeriods.reduce((a, b) => a + b, 0);
+                avgWavePeriod = parseFloat((sum / hourlyPeriods.length).toFixed(1));
+            }
+            if (hourlyDirections.length > 0) {
+                const sum = hourlyDirections.reduce((a, b) => a + b, 0);
+                avgWaveDirection = Math.round(sum / hourlyDirections.length);
             }
         }
         
@@ -435,11 +465,14 @@ async function syncAgentWeather(agent) {
             tempMin: fcTempMin,
             rain: fcRain,
             wind: fcWind,
-            seaTemp: avgSST
+            seaTemp: avgSST,
+            waveHeight: avgWaveHeight,
+            wavePeriod: avgWavePeriod,
+            waveDirection: avgWaveDirection
         };
         agent.lastChecked = checkTime;
         
-        addLog(agent.name, `Telemetry synced for ${agent.targetDate} (Temp: ${fcTempMin ?? '--'}~${fcTempMax ?? '--'}°C, Wind: ${fcWind ?? '--'}m/s, Rain: ${fcRain ?? '--'}mm, Sea Temp: ${avgSST ?? 'N/A'}°C).`, 'check-line');
+        addLog(agent.name, `Telemetry synced for ${agent.targetDate} (Temp: ${fcTempMin ?? '--'}~${fcTempMax ?? '--'}°C, Wind: ${fcWind ?? '--'}m/s, Rain: ${fcRain ?? '--'}mm, Sea Temp: ${avgSST ?? 'N/A'}°C, Wave Height: ${avgWaveHeight ?? 'N/A'}m).`, 'check-line');
         
         saveState();
         renderAll();
@@ -597,6 +630,14 @@ function clearLogs() {
     renderLogs();
 }
 
+// Convert degree angle to cardinal direction (N, NE, E, etc.)
+function getCardinalDirection(angle) {
+    if (angle === null || angle === undefined) return '--';
+    const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    const index = Math.round(angle / 22.5) % 16;
+    return directions[index];
+}
+
 // RENDER PROCEDURES
 
 function renderAll() {
@@ -707,6 +748,26 @@ function updateMapMarkers(filter = 'all') {
         const rainVal = agent.weather.rain !== null && agent.weather.rain !== undefined ? `${agent.weather.rain} mm` : '--';
         const seaTempVal = agent.weather.seaTemp !== null && agent.weather.seaTemp !== undefined ? `${agent.weather.seaTemp}°C` : '--';
         
+        const waveHeightVal = agent.weather.waveHeight !== null && agent.weather.waveHeight !== undefined ? `${agent.weather.waveHeight}m` : '--';
+        const wavePeriodVal = agent.weather.wavePeriod !== null && agent.weather.wavePeriod !== undefined ? `${agent.weather.wavePeriod}s` : '--';
+        const waveDirVal = agent.weather.waveDirection !== null && agent.weather.waveDirection !== undefined ? `${getCardinalDirection(agent.weather.waveDirection)}` : '--';
+        
+        const hasMarineData = agent.weather.seaTemp !== null || agent.weather.waveHeight !== null || agent.weather.wavePeriod !== null;
+        
+        let marinePopupHtml = '';
+        if (hasMarineData) {
+            marinePopupHtml = `
+                <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.72rem; color: var(--accent-emerald);">
+                    <div style="font-weight: 600; margin-bottom: 4px;">🌊 Marine Telemetry</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+                        <div>SST: <span style="font-weight: 600; color: var(--text-primary);">${seaTempVal}</span></div>
+                        <div>Wave: <span style="font-weight: 600; color: var(--text-primary);">${waveHeightVal}</span></div>
+                        <div style="grid-column: span 2;">Wave Period/Dir: <span style="font-weight: 600; color: var(--text-primary);">${wavePeriodVal !== '--' && waveDirVal !== '--' ? `${wavePeriodVal} / ${waveDirVal}` : '--'}</span></div>
+                    </div>
+                </div>
+            `;
+        }
+        
         const color = agent.isActive ? '#05ffa1' : '#ff3366';
         
         const marker = L.circleMarker([agent.latitude, agent.longitude], {
@@ -730,17 +791,17 @@ function updateMapMarkers(filter = 'all') {
                 <div style="font-size: 0.78rem; margin-bottom: 8px; font-weight: 500; color: var(--accent-blue);">
                     Target Date: ${agent.targetDate}
                 </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 0.75rem; margin-bottom: 10px; color: var(--text-secondary);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 0.75rem; color: var(--text-secondary);">
                     <div>🌡️ Air: <span style="font-weight: 600; color: var(--text-primary);">${tempVal}</span></div>
                     <div>🌧️ Rain: <span style="font-weight: 600; color: var(--text-primary);">${rainVal}</span></div>
-                    <div>💨 Wind: <span style="font-weight: 600; color: var(--text-primary);">${windVal}</span></div>
-                    <div>🌊 Sea: <span style="font-weight: 600; color: var(--accent-emerald);">${seaTempVal}</span></div>
+                    <div style="grid-column: span 2;">💨 Wind: <span style="font-weight: 600; color: var(--text-primary);">${windVal}</span></div>
                 </div>
-                <div style="display: flex; gap: 6px; justify-content: flex-end; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; margin-top: 4px;">
+                ${marinePopupHtml}
+                <div style="display: flex; gap: 6px; justify-content: flex-end; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; margin-top: 8px;">
                     <button onclick="syncSingleAgentWeather('${agent.id}')" style="background: rgba(0, 210, 255, 0.1); border: 1px solid var(--accent-blue-glow); color: var(--accent-blue); padding: 3px 8px; border-radius: var(--radius-sm); font-size: 0.72rem; cursor: pointer; border: 1px solid var(--accent-blue-glow);">
                         Sync
                     </button>
-                    <button onclick="toggleAgentActive('${agent.id}')" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-primary); padding: 3px 8px; border-radius: var(--radius-sm); font-size: 0.72rem; cursor: pointer; border: 1px solid var(--border-color);">
+                    <button onclick="toggleAgentActive('${agent.id}')" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: var(--text-primary); padding: 3px 8px; border-radius: var(--radius-sm); font-size: 0.72rem; cursor: pointer; border: 1px solid var(--border-color);">
                         ${agent.isActive ? 'Pause' : 'Resume'}
                     </button>
                 </div>
@@ -796,6 +857,50 @@ function renderAgentsGrid(filter = 'all') {
         const rainVal = agent.weather.rain !== null && agent.weather.rain !== undefined ? `${agent.weather.rain} mm` : '--';
         const seaTempVal = agent.weather.seaTemp !== null && agent.weather.seaTemp !== undefined ? `${agent.weather.seaTemp}°C` : '--';
         
+        const waveHeightVal = agent.weather.waveHeight !== null && agent.weather.waveHeight !== undefined ? `${agent.weather.waveHeight} m` : '--';
+        const wavePeriodVal = agent.weather.wavePeriod !== null && agent.weather.wavePeriod !== undefined ? `${agent.weather.wavePeriod} s` : '--';
+        const waveDirVal = agent.weather.waveDirection !== null && agent.weather.waveDirection !== undefined ? `${getCardinalDirection(agent.weather.waveDirection)} (${agent.weather.waveDirection}°)` : '--';
+        
+        const hasMarineData = agent.weather.seaTemp !== null || agent.weather.waveHeight !== null || agent.weather.wavePeriod !== null;
+        
+        let marineSectionHtml = '';
+        if (hasMarineData) {
+            marineSectionHtml = `
+                <div class="marine-telemetry-section" style="margin-top: 12px; border-top: 1px dashed rgba(255, 255, 255, 0.12); padding-top: 12px;">
+                    <div style="font-size: 0.78rem; color: var(--accent-emerald); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2" style="width: 14px; height: 14px;">
+                            <path d="M2 12h20M2 16h20M2 8h20"/>
+                        </svg>
+                        Marine Telemetry
+                    </div>
+                    <div class="weather-stats" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <div class="stat-box" style="border-color: rgba(5, 255, 161, 0.25);">
+                            <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2">
+                                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                            </svg>
+                            <div class="stat-value" style="color: var(--accent-emerald);">${seaTempVal}</div>
+                            <div class="stat-label">Sea Temp</div>
+                        </div>
+                        <div class="stat-box" style="border-color: rgba(5, 255, 161, 0.25);">
+                            <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2">
+                                <path d="M12 3v18M12 3l-4 4M12 3l4 4M12 21l-4-4M12 21l4-4"/>
+                            </svg>
+                            <div class="stat-value" style="color: var(--accent-emerald);">${waveHeightVal}</div>
+                            <div class="stat-label">Wave Height</div>
+                        </div>
+                        <div class="stat-box" style="border-color: rgba(5, 255, 161, 0.25); grid-column: span 2;">
+                            <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polygon points="12 6 15 15 12 12 9 15 12 6"/>
+                            </svg>
+                            <div class="stat-value" style="color: var(--accent-emerald); font-size: 0.82rem;">${wavePeriodVal !== '--' && waveDirVal !== '--' ? `${wavePeriodVal} / ${waveDirVal}` : '--'}</div>
+                            <div class="stat-label">Wave Period / Direction</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
         card.innerHTML = `
             <div class="agent-card-header">
                 <div class="agent-meta">
@@ -850,16 +955,16 @@ function renderAgentsGrid(filter = 'all') {
                         <div class="stat-label">Rain Sum</div>
                     </div>
                     
-                    <div class="stat-box">
+                    <div class="stat-box" style="grid-column: span 2;">
                         <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/>
                         </svg>
                         <div class="stat-value">${windVal}</div>
                         <div class="stat-label">Max Wind</div>
                     </div>
-
-                    <div class="stat-box" style="border-color: rgba(5, 255, 161, 0.25);">
-                        <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2">
+                </div>
+                ${marineSectionHtml}
+            </div>l="none" stroke="var(--accent-emerald)" stroke-width="2">
                             <path d="M2 12h20M2 16h20M2 8h20"/>
                         </svg>
                         <div class="stat-value" style="color: var(--accent-emerald);">${seaTempVal}</div>

@@ -15,6 +15,9 @@ let map = null;
 let markersGroup = null;
 let currentView = 'grid'; // 'grid' or 'map'
 
+// Chart.js references tracker
+let charts = {};
+
 // Initialize the Application
 document.addEventListener('DOMContentLoaded', () => {
     loadState();
@@ -360,7 +363,7 @@ function handleFormSubmit(e) {
             latitude: lat,
             longitude: lng,
             targetDate,
-            weather: { tempMin: null, tempMax: null, wind: null, rain: null, seaTemp: null, waveHeight: null, wavePeriod: null, waveDirection: null },
+            weather: { tempMin: null, tempMax: null, wind: null, rain: null, seaTemp: null, waveHeight: null, wavePeriod: null, waveDirection: null, hourlyHours: [], hourlyTemp: [], hourlyWind: [], hourlyRain: [], hourlySeaTemp: [], hourlyWaveHeight: [] },
             lastChecked: null,
             isActive: true
         };
@@ -378,7 +381,7 @@ function handleFormSubmit(e) {
 async function syncAgentWeather(agent) {
     if (!agent.isActive) return;
     
-    const forecastUrl = `https://api.open-meteo.com/v1/forecast?latitude=${agent.latitude}&longitude=${agent.longitude}&daily=temperature_2m_max,temperature_2m_min,rain_sum,wind_speed_10m_max&timezone=auto&forecast_days=16&wind_speed_unit=ms`;
+    const forecastUrl = `https://api.open-meteo.com/v1/forecast?latitude=${agent.latitude}&longitude=${agent.longitude}&daily=temperature_2m_max,temperature_2m_min,rain_sum,wind_speed_10m_max&hourly=temperature_2m,wind_speed_10m,precipitation&timezone=auto&forecast_days=16&wind_speed_unit=ms`;
     const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${agent.latitude}&longitude=${agent.longitude}&hourly=sea_surface_temperature,wave_height,wave_period,wave_direction&timezone=auto&forecast_days=16`;
     
     try {
@@ -403,6 +406,13 @@ async function syncAgentWeather(agent) {
         let avgWavePeriod = null;
         let avgWaveDirection = null;
         
+        let hourlyTemp = [];
+        let hourlyWind = [];
+        let hourlyRain = [];
+        let hourlyHours = [];
+        let hourlySeaTemp = [];
+        let hourlyWaveHeight = [];
+        
         if (forecastData.daily && forecastData.daily.time) {
             const dateIndex = forecastData.daily.time.indexOf(agent.targetDate);
             if (dateIndex !== -1) {
@@ -410,6 +420,24 @@ async function syncAgentWeather(agent) {
                 fcTempMin = forecastData.daily.temperature_2m_min[dateIndex];
                 fcRain = forecastData.daily.rain_sum[dateIndex];
                 fcWind = forecastData.daily.wind_speed_10m_max[dateIndex];
+            }
+        }
+        
+        if (forecastData.hourly && forecastData.hourly.time) {
+            const targetDay = agent.targetDate;
+            for (let i = 0; i < forecastData.hourly.time.length; i++) {
+                if (forecastData.hourly.time[i].startsWith(targetDay)) {
+                    hourlyHours.push(forecastData.hourly.time[i]);
+                    if (forecastData.hourly.temperature_2m) {
+                        hourlyTemp.push(forecastData.hourly.temperature_2m[i]);
+                    }
+                    if (forecastData.hourly.wind_speed_10m) {
+                        hourlyWind.push(forecastData.hourly.wind_speed_10m[i]);
+                    }
+                    if (forecastData.hourly.precipitation) {
+                        hourlyRain.push(forecastData.hourly.precipitation[i]);
+                    }
+                }
             }
         }
         
@@ -424,11 +452,21 @@ async function syncAgentWeather(agent) {
                 if (marineData.hourly.time[i].startsWith(targetDay)) {
                     if (marineData.hourly.sea_surface_temperature) {
                         const temp = marineData.hourly.sea_surface_temperature[i];
-                        if (temp !== null && temp !== undefined) hourlyTemps.push(temp);
+                        if (temp !== null && temp !== undefined) {
+                            hourlyTemps.push(temp);
+                            hourlySeaTemp.push(temp);
+                        } else {
+                            hourlySeaTemp.push(null);
+                        }
                     }
                     if (marineData.hourly.wave_height) {
                         const height = marineData.hourly.wave_height[i];
-                        if (height !== null && height !== undefined) hourlyHeights.push(height);
+                        if (height !== null && height !== undefined) {
+                            hourlyHeights.push(height);
+                            hourlyWaveHeight.push(height);
+                        } else {
+                            hourlyWaveHeight.push(null);
+                        }
                     }
                     if (marineData.hourly.wave_period) {
                         const period = marineData.hourly.wave_period[i];
@@ -468,7 +506,14 @@ async function syncAgentWeather(agent) {
             seaTemp: avgSST,
             waveHeight: avgWaveHeight,
             wavePeriod: avgWavePeriod,
-            waveDirection: avgWaveDirection
+            waveDirection: avgWaveDirection,
+            
+            hourlyHours: hourlyHours,
+            hourlyTemp: hourlyTemp,
+            hourlyWind: hourlyWind,
+            hourlyRain: hourlyRain,
+            hourlySeaTemp: hourlySeaTemp,
+            hourlyWaveHeight: hourlyWaveHeight
         };
         agent.lastChecked = checkTime;
         
@@ -636,6 +681,182 @@ function getCardinalDirection(angle) {
     const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
     const index = Math.round(angle / 22.5) % 16;
     return directions[index];
+}
+
+// Toggle hourly chart drawer inline in the agent card
+function toggleAgentChart(agentId) {
+    const drawer = document.getElementById(`chart_drawer_${agentId}`);
+    if (!drawer) return;
+    
+    const isHidden = drawer.classList.contains('hidden');
+    
+    // Close other drawers to keep layout clean
+    document.querySelectorAll('.chart-drawer').forEach(el => {
+        if (el.id !== `chart_drawer_${agentId}`) {
+            el.classList.add('hidden');
+            const otherId = el.id.replace('chart_drawer_', '');
+            if (charts[otherId]) {
+                charts[otherId].destroy();
+                delete charts[otherId];
+            }
+        }
+    });
+    
+    if (isHidden) {
+        drawer.classList.remove('hidden');
+        renderAgentChart(agentId);
+    } else {
+        drawer.classList.add('hidden');
+        if (charts[agentId]) {
+            charts[agentId].destroy();
+            delete charts[agentId];
+        }
+    }
+}
+
+// Render hourly trend using Chart.js on the canvas context
+function renderAgentChart(agentId) {
+    const agent = state.agents.find(a => a.id === agentId);
+    if (!agent) return;
+    
+    const canvas = document.getElementById(`canvas_${agentId}`);
+    if (!canvas) return;
+    
+    if (charts[agentId]) {
+        charts[agentId].destroy();
+    }
+    
+    const ctx = canvas.getContext('2d');
+    
+    const hours = agent.weather.hourlyHours || [];
+    const temps = agent.weather.hourlyTemp || [];
+    const winds = agent.weather.hourlyWind || [];
+    const waves = agent.weather.hourlyWaveHeight || [];
+    
+    if (temps.length === 0) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.font = '12px "Outfit", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No hourly telemetry loaded. Sync required.', canvas.width / 2, canvas.height / 2);
+        return;
+    }
+    
+    // Format hours label to HH:MM format
+    const formattedLabels = hours.map(h => {
+        const parts = h.split('T');
+        return parts[1] || h;
+    });
+    
+    const datasets = [
+        {
+            label: 'Temp (°C)',
+            data: temps,
+            borderColor: '#00d2ff',
+            backgroundColor: 'rgba(0, 210, 255, 0.05)',
+            borderWidth: 2,
+            tension: 0.35,
+            yAxisID: 'y'
+        },
+        {
+            label: 'Wind (m/s)',
+            data: winds,
+            borderColor: '#ffb300',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            borderDash: [3, 3],
+            tension: 0.35,
+            yAxisID: 'y1'
+        }
+    ];
+    
+    const hasMarine = waves.some(w => w !== null && w !== undefined);
+    if (hasMarine) {
+        datasets.push({
+            label: 'Wave (m)',
+            data: waves,
+            borderColor: '#05ffa1',
+            backgroundColor: 'rgba(5, 255, 161, 0.05)',
+            borderWidth: 2,
+            tension: 0.35,
+            yAxisID: 'y2'
+        });
+    }
+    
+    const yAxes = {
+        y: {
+            type: 'linear',
+            display: true,
+            position: 'left',
+            grid: {
+                color: 'rgba(255, 255, 255, 0.04)'
+            },
+            ticks: {
+                color: 'rgba(255, 255, 255, 0.5)',
+                font: { size: 8 }
+            }
+        },
+        y1: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            grid: {
+                drawOnChartArea: false
+            },
+            ticks: {
+                color: 'rgba(255, 255, 255, 0.5)',
+                font: { size: 8 }
+            }
+        }
+    };
+    
+    if (hasMarine) {
+        yAxes.y2 = {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            grid: {
+                drawOnChartArea: false
+            },
+            ticks: {
+                color: 'rgba(5, 255, 161, 0.6)',
+                font: { size: 8 }
+            }
+        };
+    }
+    
+    charts[agentId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: formattedLabels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    labels: {
+                        color: 'rgba(255, 255, 255, 0.6)',
+                        boxWidth: 6,
+                        font: { size: 8 }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(16, 20, 30, 0.95)',
+                    titleColor: '#ffffff',
+                    bodyColor: 'rgba(255, 255, 255, 0.8)',
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    borderWidth: 1,
+                    cornerRadius: 4,
+                    padding: 6,
+                    titleFont: { size: 9 },
+                    bodyFont: { size: 9 }
+                }
+            },
+            scales: yAxes
+        }
+    });
 }
 
 // RENDER PROCEDURES
@@ -964,11 +1185,21 @@ function renderAgentsGrid(filter = 'all') {
                     </div>
                 </div>
                 ${marineSectionHtml}
-            </div>l="none" stroke="var(--accent-emerald)" stroke-width="2">
-                            <path d="M2 12h20M2 16h20M2 8h20"/>
-                        </svg>
-                        <div class="stat-value" style="color: var(--accent-emerald);">${seaTempVal}</div>
-                        <div class="stat-label">Sea Temp</div>
+                
+                <!-- Hourly Trend Chart Drawer -->
+                <div id="chart_drawer_${agent.id}" class="chart-drawer hidden" style="margin-top: 14px; border-top: 1px dashed rgba(255, 255, 255, 0.12); padding-top: 12px; height: 180px; position: relative;">
+                    <div style="font-size: 0.76rem; color: var(--accent-blue); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="display: flex; align-items: center; gap: 6px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" style="width: 14px; height: 14px;">
+                                <path d="M3 3v18h18" />
+                                <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" />
+                            </svg>
+                            Hourly Trend Chart
+                        </span>
+                        <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 400;">24 Hours</span>
+                    </div>
+                    <div style="width: 100%; height: 140px;">
+                        <canvas id="canvas_${agent.id}"></canvas>
                     </div>
                 </div>
             </div>
@@ -976,6 +1207,12 @@ function renderAgentsGrid(filter = 'all') {
             <div class="agent-card-footer">
                 <span class="agent-last-check">Sync: ${agent.lastChecked || 'Never'}</span>
                 <div class="card-actions">
+                    <button class="action-btn btn-chart" title="View Hourly Chart" onclick="toggleAgentChart('${agent.id}')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 3v18h18" />
+                            <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" />
+                        </svg>
+                    </button>
                     <button class="action-btn btn-sync-trigger" title="Manual Sync" onclick="syncSingleAgentWeather('${agent.id}')">
                         <svg class="icon-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />

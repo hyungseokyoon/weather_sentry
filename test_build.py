@@ -86,6 +86,16 @@ def main():
                 if "webhookTestBtn" not in html:
                     raise AssertionError("Verification failed: 'webhookTestBtn' button not found in response HTML")
                 
+                # Verify dynamic assets in app.js
+                app_js_url = f"http://localhost:{TEST_PORT}/app.js"
+                req_js = urllib.request.Request(app_js_url)
+                with urllib.request.urlopen(req_js, timeout=5) as js_response:
+                    js_code = js_response.read().decode('utf-8')
+                    if "btn-history" not in js_code:
+                        raise AssertionError("Verification failed: 'btn-history' template not found in app.js")
+                    if "history_drawer_" not in js_code:
+                        raise AssertionError("Verification failed: 'history_drawer_' template not found in app.js")
+                
                 print("Content verification succeeded!")
                 passed = True
                 

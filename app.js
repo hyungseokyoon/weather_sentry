@@ -395,7 +395,8 @@ function handleFormSubmit(e) {
             weather: { tempMin: null, tempMax: null, wind: null, rain: null, seaTemp: null, waveHeight: null, wavePeriod: null, waveDirection: null, hourlyHours: [], hourlyTemp: [], hourlyWind: [], hourlyRain: [], hourlySeaTemp: [], hourlyWaveHeight: [] },
             lastChecked: null,
             isActive: true,
-            isError: false
+            isError: false,
+            history: {}
         };
         state.agents.push(newAgent);
         addLog('SYSTEM', `Agent [${name}] deployed successfully to ${locationName}.`, 'system-line');
@@ -1128,6 +1129,203 @@ function checkWeatherAlerts(agent) {
     });
 }
 
+// Toggle historical comparison drawer inline in the agent card
+function toggleAgentHistory(agentId) {
+    const drawer = document.getElementById(`history_drawer_${agentId}`);
+    if (!drawer) return;
+    
+    const isHidden = drawer.classList.contains('hidden');
+    
+    // Close other drawers to keep layout clean
+    document.querySelectorAll('.history-drawer').forEach(el => {
+        if (el.id !== `history_drawer_${agentId}`) {
+            el.classList.add('hidden');
+        }
+    });
+    
+    // Also close chart drawers to avoid vertical clutter
+    document.querySelectorAll('.chart-drawer').forEach(el => {
+        el.classList.add('hidden');
+        const chartId = el.id.replace('chart_drawer_', '');
+        if (charts[chartId]) {
+            charts[chartId].destroy();
+            delete charts[chartId];
+        }
+    });
+    
+    if (isHidden) {
+        drawer.classList.remove('hidden');
+        renderAgentHistory(agentId);
+    } else {
+        drawer.classList.add('hidden');
+    }
+}
+
+// Render historical comparison inside the card drawer
+async function renderAgentHistory(agentId) {
+    const agent = state.agents.find(a => a.id === agentId);
+    if (!agent) return;
+    
+    const select = document.getElementById(`history_year_select_${agentId}`);
+    const content = document.getElementById(`history_content_${agentId}`);
+    if (!select || !content) return;
+    
+    const yearOffset = parseInt(select.value);
+    
+    // Calculate past date based on targetDate (YYYY-MM-DD)
+    const targetDateStr = agent.targetDate; // e.g. "2026-06-15"
+    const parts = targetDateStr.split('-');
+    if (parts.length !== 3) {
+        content.innerHTML = `<span style="color: var(--accent-danger);">Invalid target date format.</span>`;
+        return;
+    }
+    
+    const targetYear = parseInt(parts[0]);
+    const month = parts[1];
+    const day = parts[2];
+    const pastYear = targetYear - yearOffset;
+    const pastDateStr = `${pastYear}-${month}-${day}`;
+    
+    // Initialize history cache on agent if not present
+    if (!agent.history) {
+        agent.history = {};
+    }
+    
+    // Check cache first
+    if (agent.history[yearOffset] && agent.history[yearOffset].date === pastDateStr) {
+        displayHistoryComparison(agent, yearOffset, pastYear);
+        return;
+    }
+    
+    // Loading State
+    content.innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 80px;">
+            <svg class="icon-sync spinning" viewBox="0 0 24 24" fill="none" stroke="var(--accent-pink)" stroke-width="2" style="width: 20px; height: 20px;">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+            </svg>
+            <span style="color: var(--text-muted); font-size: 0.7rem;">Loading past actuals for ${pastDateStr}...</span>
+        </div>
+    `;
+    
+    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${agent.latitude}&longitude=${agent.longitude}&start_date=${pastDateStr}&end_date=${pastDateStr}&daily=temperature_2m_max,temperature_2m_min,rain_sum,wind_speed_10m_max&timezone=auto&wind_speed_unit=ms`;
+    
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+        const data = await res.json();
+        
+        let tempMax = null;
+        let tempMin = null;
+        let wind = null;
+        let rain = null;
+        
+        if (data.daily && data.daily.time && data.daily.time.length > 0) {
+            tempMax = data.daily.temperature_2m_max[0];
+            tempMin = data.daily.temperature_2m_min[0];
+            wind = data.daily.wind_speed_10m_max[0];
+            rain = data.daily.rain_sum[0];
+        }
+        
+        // Cache it
+        agent.history[yearOffset] = {
+            date: pastDateStr,
+            tempMax,
+            tempMin,
+            wind,
+            rain
+        };
+        
+        saveState();
+        displayHistoryComparison(agent, yearOffset, pastYear);
+        
+    } catch (e) {
+        console.error("Failed to load historical weather", e);
+        content.innerHTML = `
+            <div style="color: var(--accent-danger); font-size: 0.72rem; text-align: center; width: 100%;">
+                ⚠️ Failed to load historical archive.<br>
+                <span style="font-size: 0.65rem; color: var(--text-muted);">Data for ${pastDateStr} may not be available.</span>
+            </div>
+        `;
+    }
+}
+
+// Draw comparison tables and delta badges
+function displayHistoryComparison(agent, yearOffset, pastYear) {
+    const content = document.getElementById(`history_content_${agent.id}`);
+    if (!content) return;
+    
+    const past = agent.history[yearOffset];
+    const current = getAgentDisplayWeather(agent);
+    
+    if (!past || past.tempMax === null || past.tempMin === null) {
+        content.innerHTML = `<span style="color: var(--text-muted); font-size: 0.72rem;">No historical records found for this coordinate on ${past.date || 'past date'}.</span>`;
+        return;
+    }
+    
+    // Calculations & delta styling helper
+    const getDeltaBadge = (currVal, pastVal, type) => {
+        if (currVal === null || currVal === undefined || pastVal === null || pastVal === undefined) {
+            return `<span class="delta-badge neutral">--</span>`;
+        }
+        const delta = currVal - pastVal;
+        const sign = delta > 0 ? '+' : '';
+        
+        if (type === 'temp') {
+            if (Math.abs(delta) < 0.2) return `<span class="delta-badge neutral">~0.0°C</span>`;
+            if (delta > 0) return `<span class="delta-badge warmer">▲ ${sign}${delta.toFixed(1)}°C (Warmer)</span>`;
+            return `<span class="delta-badge colder">▼ ${delta.toFixed(1)}°C (Colder)</span>`;
+        } else if (type === 'wind') {
+            if (Math.abs(delta) < 0.2) return `<span class="delta-badge neutral">~0.0 m/s</span>`;
+            if (delta > 0) return `<span class="delta-badge warmer">▲ ${sign}${delta.toFixed(1)} m/s (Windier)</span>`;
+            return `<span class="delta-badge colder">▼ ${delta.toFixed(1)} m/s (Calmer)</span>`;
+        } else if (type === 'rain') {
+            if (Math.abs(delta) < 0.1) return `<span class="delta-badge neutral">~0.0 mm</span>`;
+            if (delta > 0) return `<span class="delta-badge warmer">▲ ${sign}${delta.toFixed(1)} mm (Wetter)</span>`;
+            return `<span class="delta-badge colder">▼ ${delta.toFixed(1)} mm (Drier)</span>`;
+        }
+        return '';
+    };
+    
+    const formatVal = (val, unit) => val !== null && val !== undefined ? `${val}${unit}` : '--';
+    
+    content.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
+            <div style="font-size: 0.68rem; color: var(--text-muted); text-align: right; margin-bottom: 2px;">
+                Historical Date: ${past.date}
+            </div>
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr 1.8fr; gap: 6px 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; font-weight: 500;">
+                <div style="color: var(--text-muted); font-size: 0.68rem;">Metric</div>
+                <div style="color: var(--text-muted); font-size: 0.68rem; text-align: right;">${pastYear} vs 2026</div>
+                <div style="color: var(--text-muted); font-size: 0.68rem; text-align: right;">Comparison Delta</div>
+            </div>
+            <!-- Temp Max -->
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr 1.8fr; gap: 6px 12px; align-items: center;">
+                <div style="font-weight: 500;">🌡️ Temp Max</div>
+                <div style="text-align: right; font-family: 'JetBrains Mono', monospace;">${formatVal(past.tempMax, '°')} / ${formatVal(current.tempMax, '°')}</div>
+                <div style="text-align: right;">${getDeltaBadge(current.tempMax, past.tempMax, 'temp')}</div>
+            </div>
+            <!-- Temp Min -->
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr 1.8fr; gap: 6px 12px; align-items: center;">
+                <div style="font-weight: 500;">🌡️ Temp Min</div>
+                <div style="text-align: right; font-family: 'JetBrains Mono', monospace;">${formatVal(past.tempMin, '°')} / ${formatVal(current.tempMin, '°')}</div>
+                <div style="text-align: right;">${getDeltaBadge(current.tempMin, past.tempMin, 'temp')}</div>
+            </div>
+            <!-- Max Wind -->
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr 1.8fr; gap: 6px 12px; align-items: center;">
+                <div style="font-weight: 500;">💨 Max Wind</div>
+                <div style="text-align: right; font-family: 'JetBrains Mono', monospace;">${formatVal(past.wind, '')} / ${formatVal(current.wind, '')}</div>
+                <div style="text-align: right;">${getDeltaBadge(current.wind, past.wind, 'wind')}</div>
+            </div>
+            <!-- Rain Sum -->
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr 1.8fr; gap: 6px 12px; align-items: center;">
+                <div style="font-weight: 500;">🌧️ Rain Sum</div>
+                <div style="text-align: right; font-family: 'JetBrains Mono', monospace;">${formatVal(past.rain, '')} / ${formatVal(current.rain, '')}</div>
+                <div style="text-align: right;">${getDeltaBadge(current.rain, past.rain, 'rain')}</div>
+            </div>
+        </div>
+    `;
+}
+
 // Convert degree angle to cardinal direction (N, NE, E, etc.)
 function getCardinalDirection(angle) {
     if (angle === null || angle === undefined) return '--';
@@ -1673,6 +1871,27 @@ function renderAgentsGrid(filter = 'all') {
                         <canvas id="canvas_${agent.id}"></canvas>
                     </div>
                 </div>
+
+                <!-- Historical Comparison Drawer -->
+                <div id="history_drawer_${agent.id}" class="history-drawer hidden" style="margin-top: 14px; border-top: 1px dashed rgba(255, 255, 255, 0.12); padding-top: 12px; position: relative;">
+                    <div style="font-size: 0.76rem; color: var(--accent-pink); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="display: flex; align-items: center; gap: 6px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-pink)" stroke-width="2" style="width: 14px; height: 14px;">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                            </svg>
+                            Historical Comparison
+                        </span>
+                        <select id="history_year_select_${agent.id}" onchange="renderAgentHistory('${agent.id}')" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 0.68rem; padding: 2px 4px; border-radius: var(--radius-sm); font-family: inherit; outline: none; border: 1px solid var(--border-color);">
+                            <option value="1">1 Year Ago</option>
+                            <option value="2">2 Years Ago</option>
+                            <option value="3">3 Years Ago</option>
+                        </select>
+                    </div>
+                    <div id="history_content_${agent.id}" style="font-size: 0.75rem; color: var(--text-secondary); line-height: 1.5; min-height: 80px; display: flex; align-items: center; justify-content: center; width: 100%;">
+                        <span style="color: var(--text-muted); font-size: 0.72rem;">Click history button to compare with past years.</span>
+                    </div>
+                </div>
             </div>
             
             <div class="agent-card-footer">
@@ -1682,6 +1901,12 @@ function renderAgentsGrid(filter = 'all') {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M3 3v18h18" />
                             <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" />
+                        </svg>
+                    </button>
+                    <button class="action-btn btn-history" title="Compare with History" onclick="toggleAgentHistory('${agent.id}')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
                         </svg>
                     </button>
                     <button class="action-btn btn-sync-trigger" title="Manual Sync" onclick="syncSingleAgentWeather('${agent.id}')">

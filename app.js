@@ -127,6 +127,7 @@ function setupEventListeners() {
     
     // Global Actions
     document.getElementById('globalSyncBtn').addEventListener('click', syncAllAgents);
+    document.getElementById('exportAllBtn').addEventListener('click', exportAllAgentsToCSV);
     document.getElementById('clearLogsBtn').addEventListener('click', clearLogs);
     
     // Layout view switcher
@@ -1914,6 +1915,13 @@ function renderAgentsGrid(filter = 'all') {
                             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
                         </svg>
                     </button>
+                    <button class="action-btn btn-export" title="Export Weather Report" onclick="exportAgentToCSV('${agent.id}')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                    </button>
                     <button class="action-btn btn-toggle-state" title="${agent.isActive ? 'Pause monitoring' : 'Resume monitoring'}" onclick="toggleAgentActive('${agent.id}')">
                         ${agent.isActive ? `
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1984,4 +1992,163 @@ function generateDateChoices() {
         option.textContent = i === 0 ? `${dateString} (오늘 - Today)` : dateString;
         select.appendChild(option);
     }
+}
+
+// CSV download helper function
+function downloadCSV(csvContent, filename) {
+    // Add UTF-8 BOM to prevent Korean character breaking in Excel
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    if (link.download !== undefined) {
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", filename);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+}
+
+// Export individual agent data (Metadata, Current Forecast, Historical, Hourly)
+function exportAgentToCSV(agentId) {
+    const agent = state.agents.find(a => a.id === agentId);
+    if (!agent) {
+        addLog('SYSTEM', `[FAIL] 에이전트 내보내기 실패: ID ${agentId}를 찾을 수 없습니다.`, 'error-line');
+        return;
+    }
+    
+    let csv = [];
+    
+    // Metadata Header
+    csv.push(`=== NIMBUSSHIELD WEATHER AGENT REPORT ===`);
+    csv.push(`Agent ID,${agent.id}`);
+    csv.push(`Code Name,${agent.name}`);
+    csv.push(`Location Name,${agent.locationName}`);
+    csv.push(`Country,${agent.country || ''}`);
+    csv.push(`Latitude,${agent.latitude}`);
+    csv.push(`Longitude,${agent.longitude}`);
+    csv.push(`Target Date,${agent.targetDate}`);
+    csv.push(`Status,${agent.isActive ? 'Active' : 'Paused'}`);
+    csv.push(`Last Sync,${agent.lastChecked || 'Never'}`);
+    csv.push(``); // Empty row
+    
+    // Current Weather Data
+    csv.push(`=== CURRENT WEATHER DATA ===`);
+    csv.push(`Metric,Value,Unit`);
+    
+    const tempMin = agent.tempMin !== undefined ? agent.tempMin : 'N/A';
+    const tempMax = agent.tempMax !== undefined ? agent.tempMax : 'N/A';
+    csv.push(`Min Temperature,${tempMin},°C`);
+    csv.push(`Max Temperature,${tempMax},°C`);
+    
+    const rainSum = agent.rainSum !== undefined ? agent.rainSum : 'N/A';
+    csv.push(`Rain Sum,${rainSum},mm`);
+    
+    const windSpeed = agent.windSpeed !== undefined ? agent.windSpeed : 'N/A';
+    csv.push(`Max Wind Speed,${windSpeed},m/s`);
+    
+    if (agent.isMarine) {
+        const sst = agent.seaTemp !== undefined ? agent.seaTemp : 'N/A';
+        const waveHeight = agent.waveHeight !== undefined ? agent.waveHeight : 'N/A';
+        const wavePeriod = agent.wavePeriod !== undefined ? agent.wavePeriod : 'N/A';
+        const waveDirection = agent.waveDirection !== undefined ? agent.waveDirection : 'N/A';
+        csv.push(`Sea Surface Temp,${sst},°C`);
+        csv.push(`Significant Wave Height,${waveHeight},m`);
+        csv.push(`Mean Wave Period,${wavePeriod},s`);
+        csv.push(`Mean Wave Direction,${waveDirection},°`);
+    }
+    csv.push(``); // Empty row
+    
+    // Historical Comparison Data (if cached)
+    csv.push(`=== HISTORICAL WEATHER COMPARISON ===`);
+    csv.push(`Year,Min Temperature (°C),Max Temperature (°C),Rain Sum (mm),Max Wind Speed (m/s),Wave Height (m),Wave Period (s)`);
+    
+    if (agent.history && Object.keys(agent.history).length > 0) {
+        Object.keys(agent.history).forEach(year => {
+            const hist = agent.history[year];
+            if (hist && !hist.error) {
+                const hTempMin = hist.tempMin !== undefined ? hist.tempMin : 'N/A';
+                const hTempMax = hist.tempMax !== undefined ? hist.tempMax : 'N/A';
+                const hRainSum = hist.rainSum !== undefined ? hist.rainSum : 'N/A';
+                const hWindSpeed = hist.windSpeed !== undefined ? hist.windSpeed : 'N/A';
+                const hWaveHeight = hist.waveHeight !== undefined ? hist.waveHeight : 'N/A';
+                const hWavePeriod = hist.wavePeriod !== undefined ? hist.wavePeriod : 'N/A';
+                csv.push(`${year} Year(s) Ago,${hTempMin},${hTempMax},${hRainSum},${hWindSpeed},${hWaveHeight},${hWavePeriod}`);
+            } else {
+                csv.push(`${year} Year(s) Ago,Error/Not Loaded,,,,`);
+            }
+        });
+    } else {
+        csv.push(`No historical comparison data loaded.,,,,,,`);
+    }
+    csv.push(``);
+    
+    // Hourly Forecast (if hourly data exists)
+    csv.push(`=== HOURLY FORECAST DATA ===`);
+    csv.push(`Hour,Temperature (°C),Rain Probability (%)`);
+    
+    if (agent.hourly && agent.hourly.time && agent.hourly.time.length > 0) {
+        for (let i = 0; i < agent.hourly.time.length; i++) {
+            const timeStr = agent.hourly.time[i]; // e.g. "2026-06-10T00:00"
+            const hourPart = timeStr.split('T')[1] || timeStr;
+            const temp = agent.hourly.temperature_2m !== undefined ? agent.hourly.temperature_2m[i] : 'N/A';
+            const rainProb = agent.hourly.precipitation_probability !== undefined ? agent.hourly.precipitation_probability[i] : 'N/A';
+            csv.push(`${hourPart},${temp},${rainProb}`);
+        }
+    } else {
+        csv.push(`No hourly forecast data available.,,`);
+    }
+    
+    const csvContent = csv.join("\n");
+    const safeName = agent.name.replace(/[^a-z0-9ㄱ-ㅎㅏ-ㅣ가-힣]/gi, '_').toLowerCase();
+    const filename = `nimbusshield_report_${safeName}_${agent.targetDate}.csv`;
+    
+    downloadCSV(csvContent, filename);
+    addLog('SYSTEM', `[SUCCESS] 에이전트 [${agent.name}]의 CSV 기상 보고서 다운로드를 시작합니다.`, 'system-line');
+}
+
+// Export all deployed agents' summaries into a single CSV
+function exportAllAgentsToCSV() {
+    if (state.agents.length === 0) {
+        addLog('SYSTEM', `[FAIL] 내보낼 에이전트 데이터가 존재하지 않습니다.`, 'error-line');
+        alert("배포된 에이전트가 없습니다. 먼저 에이전트를 생성해 주세요.");
+        return;
+    }
+    
+    let csv = [];
+    // Header
+    csv.push(`Agent ID,Code Name,Location Name,Country,Latitude,Longitude,Target Date,Status,Last Sync,Min Temp (°C),Max Temp (°C),Rain Sum (mm),Max Wind (m/s),Is Marine,Sea Temp (°C),Wave Height (m),Wave Period (s),Wave Direction (°)`);
+    
+    state.agents.forEach(agent => {
+        const tempMin = agent.tempMin !== undefined ? agent.tempMin : 'N/A';
+        const tempMax = agent.tempMax !== undefined ? agent.tempMax : 'N/A';
+        const rainSum = agent.rainSum !== undefined ? agent.rainSum : 'N/A';
+        const windSpeed = agent.windSpeed !== undefined ? agent.windSpeed : 'N/A';
+        
+        let marineFields = `FALSE,N/A,N/A,N/A,N/A`;
+        if (agent.isMarine) {
+            const sst = agent.seaTemp !== undefined ? agent.seaTemp : 'N/A';
+            const waveHeight = agent.waveHeight !== undefined ? agent.waveHeight : 'N/A';
+            const wavePeriod = agent.wavePeriod !== undefined ? agent.wavePeriod : 'N/A';
+            const waveDirection = agent.waveDirection !== undefined ? agent.waveDirection : 'N/A';
+            marineFields = `TRUE,${sst},${waveHeight},${wavePeriod},${waveDirection}`;
+        }
+        
+        // CSV fields escaping commas
+        const escapedName = `"${agent.name.replace(/"/g, '""')}"`;
+        const escapedLocName = `"${agent.locationName.replace(/"/g, '""')}"`;
+        
+        csv.push(`${agent.id},${escapedName},${escapedLocName},${agent.country || ''},${agent.latitude},${agent.longitude},${agent.targetDate},${agent.isActive ? 'Active' : 'Paused'},"${agent.lastChecked || 'Never'}",${tempMin},${tempMax},${rainSum},${windSpeed},${marineFields}`);
+    });
+    
+    const csvContent = csv.join("\n");
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const filename = `nimbusshield_all_agents_${yyyy}-${mm}-${dd}.csv`;
+    
+    downloadCSV(csvContent, filename);
+    addLog('SYSTEM', `[SUCCESS] 전체 에이전트 요약 데이터 [${state.agents.length}개]의 CSV 다운로드를 시작합니다.`, 'system-line');
 }

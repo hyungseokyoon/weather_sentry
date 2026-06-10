@@ -107,7 +107,94 @@
 
             <!-- Right Panel: Sidebars (Alarms & Logs) -->
             <aside class="workspace-sidebar">
-                <!-- Telemetry Log Panel -->
+                <!-- Weather Sandbox Simulator -->
+                <div class="sidebar-card simulator-panel" style="margin-bottom: 20px;">
+                    <div class="card-header">
+                        <h3 style="display: flex; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" style="width: 18px; height: 18px;">
+                                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            Weather Sandbox Simulator
+                        </h3>
+                        <span class="badge-blue" id="simModeStatus" style="font-size: 0.68rem; padding: 2px 6px; border-radius: 4px; background: rgba(0, 210, 255, 0.1); border: 1px solid var(--accent-blue-glow); color: var(--accent-blue);">OFF</span>
+                    </div>
+                    <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+                        <!-- Toggle and Target selection -->
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <label class="checkbox-container" style="margin-top: 0; padding-left: 24px;">
+                                Enable Override
+                                <input type="checkbox" id="simToggle">
+                                <span class="checkmark" style="top: 0;"></span>
+                            </label>
+                            <button id="simResetBtn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.72rem; display: flex; align-items: center; gap: 4px;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 12px; height: 12px;">
+                                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                                </svg>
+                                Reset
+                            </button>
+                        </div>
+                        
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="simTargetSelect" style="font-size: 0.7rem; color: var(--text-muted); font-weight: 500;">Target Agent</label>
+                            <select id="simTargetSelect" style="width: 100%; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px 10px; border-radius: var(--radius-sm); font-size: 0.8rem; font-family: inherit; outline: none;">
+                                <option value="all">All Deployed Agents</option>
+                            </select>
+                        </div>
+
+                        <!-- Variables Group -->
+                        <div id="simSlidersContainer" style="display: flex; flex-direction: column; gap: 10px; opacity: 0.5; pointer-events: none; transition: opacity 0.2s ease;">
+                            <!-- Temp Min -->
+                            <div class="sim-slider-group">
+                                <div class="sim-slider-label">
+                                    <span>🌡️ Forecast Temp Min</span>
+                                    <span><span id="simTempMinVal">10.0</span>°C</span>
+                                </div>
+                                <input type="range" id="simTempMin" min="-30" max="50" value="10" step="0.5" class="sim-slider">
+                            </div>
+                            <!-- Temp Max -->
+                            <div class="sim-slider-group">
+                                <div class="sim-slider-label">
+                                    <span>🌡️ Forecast Temp Max</span>
+                                    <span><span id="simTempMaxVal">20.0</span>°C</span>
+                                </div>
+                                <input type="range" id="simTempMax" min="-30" max="50" value="20" step="0.5" class="sim-slider">
+                            </div>
+                            <!-- Wind Speed -->
+                            <div class="sim-slider-group">
+                                <div class="sim-slider-label">
+                                    <span>💨 Max Wind Speed</span>
+                                    <span><span id="simWindVal">5.0</span> m/s</span>
+                                </div>
+                                <input type="range" id="simWind" min="0" max="50" value="5" step="0.5" class="sim-slider">
+                            </div>
+                            <!-- Rain -->
+                            <div class="sim-slider-group">
+                                <div class="sim-slider-label">
+                                    <span>🌧️ Rain Sum</span>
+                                    <span><span id="simRainVal">0.0</span> mm</span>
+                                </div>
+                                <input type="range" id="simRain" min="0" max="100" value="0" step="0.5" class="sim-slider">
+                            </div>
+                            <!-- Sea Temp -->
+                            <div class="sim-slider-group">
+                                <div class="sim-slider-label">
+                                    <span>🌊 Sea Temperature</span>
+                                    <span><span id="simSeaTempVal">15.0</span>°C</span>
+                                </div>
+                                <input type="range" id="simSeaTemp" min="-5" max="40" value="15" step="0.5" class="sim-slider">
+                            </div>
+                            <!-- Wave Height -->
+                            <div class="sim-slider-group">
+                                <div class="sim-slider-label">
+                                    <span>🌊 Wave Height</span>
+                                    <span><span id="simWaveHeightVal">1.0</span> m</span>
+                                </div>
+                                <input type="range" id="simWaveHeight" min="0" max="15" value="1.0" step="0.1" class="sim-slider">
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Live Agent Logs (Terminal-style) -->
                 <div class="sidebar-card log-panel">

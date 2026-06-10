@@ -1181,3 +1181,65 @@ input[type="number"]:focus,
     background-color: rgba(255, 255, 255, 0.1) !important;
     color: var(--text-primary) !important;
 }
+
+/* Sandbox Simulator Sliders */
+.sim-slider-group {
+    margin-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sim-slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+}
+
+.sim-slider-value {
+    font-weight: 600;
+    color: var(--accent-blue);
+}
+
+.sim-slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.15);
+    outline: none;
+    transition: background 0.15s ease-in-out;
+}
+
+.sim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    cursor: pointer;
+    box-shadow: 0 0 6px var(--accent-blue-glow);
+    transition: transform var(--transition-fast);
+}
+
+.sim-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.3);
+}
+
+.sim-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    cursor: pointer;
+    box-shadow: 0 0 6px var(--accent-blue-glow);
+    transition: transform var(--transition-fast);
+}
+
+.sim-slider::-moz-range-thumb:hover {
+    transform: scale(1.3);
+}
+

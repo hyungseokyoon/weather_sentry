@@ -70,6 +70,14 @@ def main():
                 if "leaflet.js" not in html.lower():
                     raise AssertionError("Verification failed: Leaflet.js script dependency not found in response HTML")
                 
+                # Check for weather sandbox simulator interface elements
+                if "simToggle" not in html:
+                    raise AssertionError("Verification failed: 'simToggle' checkbox not found in response HTML")
+                if "simTargetSelect" not in html:
+                    raise AssertionError("Verification failed: 'simTargetSelect' dropdown not found in response HTML")
+                if "simTempMin" not in html:
+                    raise AssertionError("Verification failed: 'simTempMin' slider not found in response HTML")
+                
                 print("Content verification succeeded!")
                 passed = True
                 

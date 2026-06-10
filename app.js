@@ -18,10 +18,23 @@ let currentView = 'grid'; // 'grid' or 'map'
 // Chart.js references tracker
 let charts = {};
 
+// Simulator state
+let isSimulationMode = false;
+let simTargetAgentId = 'all';
+let simulatedWeather = {
+    tempMin: 10.0,
+    tempMax: 20.0,
+    wind: 5.0,
+    rain: 0.0,
+    seaTemp: 15.0,
+    waveHeight: 1.0
+};
+
 // Initialize the Application
 document.addEventListener('DOMContentLoaded', () => {
     loadState();
     setupEventListeners();
+    setupSimulator();
     renderAll();
     
     addLog('SYSTEM', 'NimbusShield core telemetry online. Fetching weather systems...', 'system-line');
@@ -365,7 +378,8 @@ function handleFormSubmit(e) {
             targetDate,
             weather: { tempMin: null, tempMax: null, wind: null, rain: null, seaTemp: null, waveHeight: null, wavePeriod: null, waveDirection: null, hourlyHours: [], hourlyTemp: [], hourlyWind: [], hourlyRain: [], hourlySeaTemp: [], hourlyWaveHeight: [] },
             lastChecked: null,
-            isActive: true
+            isActive: true,
+            isError: false
         };
         state.agents.push(newAgent);
         addLog('SYSTEM', `Agent [${name}] deployed successfully to ${locationName}.`, 'system-line');
@@ -516,6 +530,7 @@ async function syncAgentWeather(agent) {
             hourlyWaveHeight: hourlyWaveHeight
         };
         agent.lastChecked = checkTime;
+        agent.isError = false;
         
         addLog(agent.name, `Telemetry synced for ${agent.targetDate} (Temp: ${fcTempMin ?? '--'}~${fcTempMax ?? '--'}°C, Wind: ${fcWind ?? '--'}m/s, Rain: ${fcRain ?? '--'}mm, Sea Temp: ${avgSST ?? 'N/A'}°C, Wave Height: ${avgWaveHeight ?? 'N/A'}m).`, 'check-line');
         
@@ -523,7 +538,9 @@ async function syncAgentWeather(agent) {
         renderAll();
     } catch (error) {
         console.error(`Error syncing agent ${agent.name}:`, error);
+        agent.isError = true;
         addLog(agent.name, `Telemetry sync failed: Service temporarily offline.`, 'error-line');
+        saveState();
         renderAll();
     }
 }
@@ -675,6 +692,196 @@ function clearLogs() {
     renderLogs();
 }
 
+// Helper to retrieve display weather (with simulation override support)
+function getAgentDisplayWeather(agent) {
+    if (isSimulationMode && (simTargetAgentId === 'all' || simTargetAgentId === agent.id)) {
+        // Generate simulated hourly trend (beautiful smooth curves)
+        const hours = agent.weather?.hourlyHours?.length ? agent.weather.hourlyHours : Array.from({length: 24}, (_, i) => `T${String(i).padStart(2, '0')}:00`);
+        const hourlyTemp = Array.from({length: 24}, (_, i) => {
+            const t = Math.sin((i - 6) * Math.PI / 12); // peak temperature around 14:00
+            const range = simulatedWeather.tempMax - simulatedWeather.tempMin;
+            const avg = (simulatedWeather.tempMax + simulatedWeather.tempMin) / 2;
+            return parseFloat((avg + (range / 2) * t).toFixed(1));
+        });
+        const hourlyWind = Array.from({length: 24}, (_, i) => {
+            const t = Math.cos((i - 12) * Math.PI / 12);
+            return parseFloat((simulatedWeather.wind * (0.8 + 0.4 * t)).toFixed(1));
+        });
+        const hourlyRain = Array.from({length: 24}, (_, i) => {
+            if (simulatedWeather.rain <= 0) return 0;
+            // rainy afternoon or scattered rain
+            if (i >= 12 && i <= 18) {
+                return parseFloat((simulatedWeather.rain / 7).toFixed(1));
+            }
+            return 0;
+        });
+        const hourlySeaTemp = Array.from({length: 24}, () => simulatedWeather.seaTemp);
+        const hourlyWaveHeight = Array.from({length: 24}, (_, i) => {
+            const t = Math.sin(i * Math.PI / 8);
+            return parseFloat((simulatedWeather.waveHeight * (0.9 + 0.2 * t)).toFixed(2));
+        });
+
+        return {
+            tempMin: simulatedWeather.tempMin,
+            tempMax: simulatedWeather.tempMax,
+            wind: simulatedWeather.wind,
+            rain: simulatedWeather.rain,
+            seaTemp: simulatedWeather.seaTemp,
+            waveHeight: simulatedWeather.waveHeight,
+            wavePeriod: agent.weather?.wavePeriod !== undefined && agent.weather?.wavePeriod !== null ? agent.weather.wavePeriod : 6.5,
+            waveDirection: agent.weather?.waveDirection !== undefined && agent.weather?.waveDirection !== null ? agent.weather.waveDirection : 180,
+            
+            hourlyHours: hours,
+            hourlyTemp: hourlyTemp,
+            hourlyWind: hourlyWind,
+            hourlyRain: hourlyRain,
+            hourlySeaTemp: hourlySeaTemp,
+            hourlyWaveHeight: hourlyWaveHeight
+        };
+    }
+    return agent.weather || {};
+}
+
+// Setup Simulator controls and events
+function setupSimulator() {
+    const simToggle = document.getElementById('simToggle');
+    const simTargetSelect = document.getElementById('simTargetSelect');
+    const simSlidersContainer = document.getElementById('simSlidersContainer');
+    const simModeStatus = document.getElementById('simModeStatus');
+    const simResetBtn = document.getElementById('simResetBtn');
+    
+    const sliders = {
+        tempMin: { input: document.getElementById('simTempMin'), val: document.getElementById('simTempMinVal'), unit: '°C' },
+        tempMax: { input: document.getElementById('simTempMax'), val: document.getElementById('simTempMaxVal'), unit: '°C' },
+        wind: { input: document.getElementById('simWind'), val: document.getElementById('simWindVal'), unit: ' m/s' },
+        rain: { input: document.getElementById('simRain'), val: document.getElementById('simRainVal'), unit: ' mm' },
+        seaTemp: { input: document.getElementById('simSeaTemp'), val: document.getElementById('simSeaTempVal'), unit: '°C' },
+        waveHeight: { input: document.getElementById('simWaveHeight'), val: document.getElementById('simWaveHeightVal'), unit: ' m' }
+    };
+    
+    // Sync slider values to state
+    const updateSimValues = () => {
+        simulatedWeather.tempMin = parseFloat(sliders.tempMin.input.value);
+        simulatedWeather.tempMax = parseFloat(sliders.tempMax.input.value);
+        simulatedWeather.wind = parseFloat(sliders.wind.input.value);
+        simulatedWeather.rain = parseFloat(sliders.rain.input.value);
+        simulatedWeather.seaTemp = parseFloat(sliders.seaTemp.input.value);
+        simulatedWeather.waveHeight = parseFloat(sliders.waveHeight.input.value);
+        
+        // Update value labels
+        Object.keys(sliders).forEach(key => {
+            sliders[key].val.textContent = sliders[key].input.value;
+        });
+    };
+    
+    // Handle toggle simulation mode
+    simToggle.addEventListener('change', (e) => {
+        isSimulationMode = e.target.checked;
+        if (isSimulationMode) {
+            simSlidersContainer.style.opacity = '1';
+            simSlidersContainer.style.pointerEvents = 'auto';
+            simModeStatus.textContent = 'ON';
+            simModeStatus.style.background = 'rgba(5, 255, 161, 0.1)';
+            simModeStatus.style.borderColor = 'var(--accent-emerald)';
+            simModeStatus.style.color = 'var(--accent-emerald)';
+            addLog('SIMULATOR', 'Weather Sandbox Simulator ACTIVE. Overriding target agents.', 'system-line');
+        } else {
+            simSlidersContainer.style.opacity = '0.5';
+            simSlidersContainer.style.pointerEvents = 'none';
+            simModeStatus.textContent = 'OFF';
+            simModeStatus.style.background = 'rgba(0, 210, 255, 0.1)';
+            simModeStatus.style.borderColor = 'var(--accent-blue-glow)';
+            simModeStatus.style.color = 'var(--accent-blue)';
+            addLog('SIMULATOR', 'Weather Sandbox Simulator DEACTIVATED. Reverting to real-time data.', 'system-line');
+        }
+        renderAll();
+        
+        // Also refresh any open charts
+        Object.keys(charts).forEach(agentId => {
+            renderAgentChart(agentId);
+        });
+    });
+    
+    // Handle target select change
+    simTargetSelect.addEventListener('change', (e) => {
+        simTargetAgentId = e.target.value;
+        if (isSimulationMode) {
+            addLog('SIMULATOR', `Simulation target changed to: ${simTargetAgentId === 'all' ? 'All Deployed Agents' : 'Agent ' + state.agents.find(a => a.id === simTargetAgentId)?.name}`, 'system-line');
+            renderAll();
+            Object.keys(charts).forEach(agentId => {
+                renderAgentChart(agentId);
+            });
+        }
+    });
+    
+    // Sliders event listeners
+    Object.keys(sliders).forEach(key => {
+        sliders[key].input.addEventListener('input', () => {
+            updateSimValues();
+            if (isSimulationMode) {
+                renderAll();
+                // If the target has an open chart, re-render the chart dynamically!
+                Object.keys(charts).forEach(agentId => {
+                    if (simTargetAgentId === 'all' || simTargetAgentId === agentId) {
+                        renderAgentChart(agentId);
+                    }
+                });
+            }
+        });
+    });
+    
+    // Reset button
+    simResetBtn.addEventListener('click', () => {
+        simToggle.checked = false;
+        isSimulationMode = false;
+        simSlidersContainer.style.opacity = '0.5';
+        simSlidersContainer.style.pointerEvents = 'none';
+        simModeStatus.textContent = 'OFF';
+        simModeStatus.style.background = 'rgba(0, 210, 255, 0.1)';
+        simModeStatus.style.borderColor = 'var(--accent-blue-glow)';
+        simModeStatus.style.color = 'var(--accent-blue)';
+        
+        sliders.tempMin.input.value = 10.0;
+        sliders.tempMax.input.value = 20.0;
+        sliders.wind.input.value = 5.0;
+        sliders.rain.input.value = 0.0;
+        sliders.seaTemp.input.value = 15.0;
+        sliders.waveHeight.input.value = 1.0;
+        
+        updateSimValues();
+        addLog('SIMULATOR', 'Simulator settings reset to default values.', 'system-line');
+        renderAll();
+        
+        // Refresh charts
+        Object.keys(charts).forEach(agentId => {
+            renderAgentChart(agentId);
+        });
+    });
+    
+    // Initial setup
+    updateSimValues();
+    updateSimulatorTargets();
+}
+
+// Update target options in simulator select dropdown
+function updateSimulatorTargets() {
+    const simTargetSelect = document.getElementById('simTargetSelect');
+    if (!simTargetSelect) return;
+    
+    const currentSel = simTargetSelect.value;
+    
+    simTargetSelect.innerHTML = '<option value="all">All Deployed Agents</option>';
+    state.agents.forEach(agent => {
+        const opt = document.createElement('option');
+        opt.value = agent.id;
+        opt.textContent = `${agent.name} (${agent.locationName})`;
+        if (currentSel === agent.id) {
+            opt.selected = true;
+        }
+        simTargetSelect.appendChild(opt);
+    });
+}
+
 // Convert degree angle to cardinal direction (N, NE, E, etc.)
 function getCardinalDirection(angle) {
     if (angle === null || angle === undefined) return '--';
@@ -728,10 +935,11 @@ function renderAgentChart(agentId) {
     
     const ctx = canvas.getContext('2d');
     
-    const hours = agent.weather.hourlyHours || [];
-    const temps = agent.weather.hourlyTemp || [];
-    const winds = agent.weather.hourlyWind || [];
-    const waves = agent.weather.hourlyWaveHeight || [];
+    const displayWeather = getAgentDisplayWeather(agent);
+    const hours = displayWeather.hourlyHours || [];
+    const temps = displayWeather.hourlyTemp || [];
+    const winds = displayWeather.hourlyWind || [];
+    const waves = displayWeather.hourlyWaveHeight || [];
     
     if (temps.length === 0) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
@@ -870,6 +1078,7 @@ function renderAll() {
     renderAgentsGrid(activeFilter);
     updateMapMarkers(activeFilter);
     renderLogs();
+    updateSimulatorTargets();
     
     document.getElementById('agentCount').textContent = state.agents.length;
 }
@@ -962,18 +1171,19 @@ function updateMapMarkers(filter = 'all') {
     }
     
     filteredAgents.forEach(agent => {
-        const tempMinVal = agent.weather.tempMin !== null && agent.weather.tempMin !== undefined ? `${agent.weather.tempMin}°C` : '--';
-        const tempMaxVal = agent.weather.tempMax !== null && agent.weather.tempMax !== undefined ? `${agent.weather.tempMax}°C` : '--';
-        const tempVal = agent.weather.tempMin !== null && agent.weather.tempMax !== null ? `${tempMinVal} ~ ${tempMaxVal}` : '--';
-        const windVal = agent.weather.wind !== null && agent.weather.wind !== undefined ? `${agent.weather.wind} m/s` : '--';
-        const rainVal = agent.weather.rain !== null && agent.weather.rain !== undefined ? `${agent.weather.rain} mm` : '--';
-        const seaTempVal = agent.weather.seaTemp !== null && agent.weather.seaTemp !== undefined ? `${agent.weather.seaTemp}°C` : '--';
+        const displayWeather = getAgentDisplayWeather(agent);
+        const tempMinVal = displayWeather.tempMin !== null && displayWeather.tempMin !== undefined ? `${displayWeather.tempMin}°C` : '--';
+        const tempMaxVal = displayWeather.tempMax !== null && displayWeather.tempMax !== undefined ? `${displayWeather.tempMax}°C` : '--';
+        const tempVal = displayWeather.tempMin !== null && displayWeather.tempMax !== null ? `${tempMinVal} ~ ${tempMaxVal}` : '--';
+        const windVal = displayWeather.wind !== null && displayWeather.wind !== undefined ? `${displayWeather.wind} m/s` : '--';
+        const rainVal = displayWeather.rain !== null && displayWeather.rain !== undefined ? `${displayWeather.rain} mm` : '--';
+        const seaTempVal = displayWeather.seaTemp !== null && displayWeather.seaTemp !== undefined ? `${displayWeather.seaTemp}°C` : '--';
         
-        const waveHeightVal = agent.weather.waveHeight !== null && agent.weather.waveHeight !== undefined ? `${agent.weather.waveHeight}m` : '--';
-        const wavePeriodVal = agent.weather.wavePeriod !== null && agent.weather.wavePeriod !== undefined ? `${agent.weather.wavePeriod}s` : '--';
-        const waveDirVal = agent.weather.waveDirection !== null && agent.weather.waveDirection !== undefined ? `${getCardinalDirection(agent.weather.waveDirection)}` : '--';
+        const waveHeightVal = displayWeather.waveHeight !== null && displayWeather.waveHeight !== undefined ? `${displayWeather.waveHeight}m` : '--';
+        const wavePeriodVal = displayWeather.wavePeriod !== null && displayWeather.wavePeriod !== undefined ? `${displayWeather.wavePeriod}s` : '--';
+        const waveDirVal = displayWeather.waveDirection !== null && displayWeather.waveDirection !== undefined ? `${getCardinalDirection(displayWeather.waveDirection)}` : '--';
         
-        const hasMarineData = agent.weather.seaTemp !== null || agent.weather.waveHeight !== null || agent.weather.wavePeriod !== null;
+        const hasMarineData = displayWeather.seaTemp !== null || displayWeather.waveHeight !== null || displayWeather.wavePeriod !== null;
         
         let marinePopupHtml = '';
         if (hasMarineData) {
@@ -989,7 +1199,15 @@ function updateMapMarkers(filter = 'all') {
             `;
         }
         
-        const color = agent.isActive ? '#05ffa1' : '#ff3366';
+        let color = '#05ffa1'; // green
+        let statusDotClass = 'green';
+        if (!agent.isActive) {
+            color = '#ff3366'; // red
+            statusDotClass = 'red';
+        } else if (agent.isError) {
+            color = '#ffb300'; // yellow
+            statusDotClass = 'yellow';
+        }
         
         const marker = L.circleMarker([agent.latitude, agent.longitude], {
             radius: 8,
@@ -1003,7 +1221,7 @@ function updateMapMarkers(filter = 'all') {
         const popupHtml = `
             <div class="map-popup-card">
                 <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; color: var(--text-primary);">
-                    <span class="status-dot ${agent.isActive ? 'green' : 'red'}" style="width: 8px; height: 8px; display: inline-block; border-radius: 50%;"></span>
+                    <span class="status-dot ${statusDotClass}" style="width: 8px; height: 8px; display: inline-block; border-radius: 50%;"></span>
                     ${agent.name}
                 </div>
                 <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">
@@ -1064,25 +1282,28 @@ function renderAgentsGrid(filter = 'all') {
         
         // Simplified status dots
         let statusBadgeHtml = '';
-        if (agent.isActive) {
-            statusBadgeHtml = `<span class="status-dot green pulse" title="Active"></span>`;
-        } else {
+        if (!agent.isActive) {
             statusBadgeHtml = `<span class="status-dot red" title="Paused"></span>`;
+        } else if (agent.isError) {
+            statusBadgeHtml = `<span class="status-dot yellow" title="Telemetry offline"></span>`;
+        } else {
+            statusBadgeHtml = `<span class="status-dot green pulse" title="Active"></span>`;
         }
         
         // Format daily forecast weather metrics
-        const tempMinVal = agent.weather.tempMin !== null && agent.weather.tempMin !== undefined ? `${agent.weather.tempMin}°C` : '--';
-        const tempMaxVal = agent.weather.tempMax !== null && agent.weather.tempMax !== undefined ? `${agent.weather.tempMax}°C` : '--';
-        const tempVal = agent.weather.tempMin !== null && agent.weather.tempMax !== null ? `${tempMinVal} ~ ${tempMaxVal}` : '--';
-        const windVal = agent.weather.wind !== null && agent.weather.wind !== undefined ? `${agent.weather.wind} m/s` : '--';
-        const rainVal = agent.weather.rain !== null && agent.weather.rain !== undefined ? `${agent.weather.rain} mm` : '--';
-        const seaTempVal = agent.weather.seaTemp !== null && agent.weather.seaTemp !== undefined ? `${agent.weather.seaTemp}°C` : '--';
+        const displayWeather = getAgentDisplayWeather(agent);
+        const tempMinVal = displayWeather.tempMin !== null && displayWeather.tempMin !== undefined ? `${displayWeather.tempMin}°C` : '--';
+        const tempMaxVal = displayWeather.tempMax !== null && displayWeather.tempMax !== undefined ? `${displayWeather.tempMax}°C` : '--';
+        const tempVal = displayWeather.tempMin !== null && displayWeather.tempMax !== null ? `${tempMinVal} ~ ${tempMaxVal}` : '--';
+        const windVal = displayWeather.wind !== null && displayWeather.wind !== undefined ? `${displayWeather.wind} m/s` : '--';
+        const rainVal = displayWeather.rain !== null && displayWeather.rain !== undefined ? `${displayWeather.rain} mm` : '--';
+        const seaTempVal = displayWeather.seaTemp !== null && displayWeather.seaTemp !== undefined ? `${displayWeather.seaTemp}°C` : '--';
         
-        const waveHeightVal = agent.weather.waveHeight !== null && agent.weather.waveHeight !== undefined ? `${agent.weather.waveHeight} m` : '--';
-        const wavePeriodVal = agent.weather.wavePeriod !== null && agent.weather.wavePeriod !== undefined ? `${agent.weather.wavePeriod} s` : '--';
-        const waveDirVal = agent.weather.waveDirection !== null && agent.weather.waveDirection !== undefined ? `${getCardinalDirection(agent.weather.waveDirection)} (${agent.weather.waveDirection}°)` : '--';
+        const waveHeightVal = displayWeather.waveHeight !== null && displayWeather.waveHeight !== undefined ? `${displayWeather.waveHeight} m` : '--';
+        const wavePeriodVal = displayWeather.wavePeriod !== null && displayWeather.wavePeriod !== undefined ? `${displayWeather.wavePeriod} s` : '--';
+        const waveDirVal = displayWeather.waveDirection !== null && displayWeather.waveDirection !== undefined ? `${getCardinalDirection(displayWeather.waveDirection)} (${displayWeather.waveDirection}°)` : '--';
         
-        const hasMarineData = agent.weather.seaTemp !== null || agent.weather.waveHeight !== null || agent.weather.wavePeriod !== null;
+        const hasMarineData = displayWeather.seaTemp !== null || displayWeather.waveHeight !== null || displayWeather.wavePeriod !== null;
         
         let marineSectionHtml = '';
         if (hasMarineData) {
@@ -1122,6 +1343,9 @@ function renderAgentsGrid(filter = 'all') {
             `;
         }
         
+        const isSimulated = isSimulationMode && (simTargetAgentId === 'all' || simTargetAgentId === agent.id);
+        const simBadgeHtml = isSimulated ? `<span style="font-size: 0.65rem; color: var(--accent-blue); border: 1px solid var(--accent-blue-glow); padding: 1px 4px; border-radius: 3px; font-weight: 500; text-transform: uppercase; margin-left: 4px; flex-shrink: 0; background: rgba(0, 210, 255, 0.05);">SIM</span>` : '';
+
         card.innerHTML = `
             <div class="agent-card-header">
                 <div class="agent-meta">
@@ -1133,6 +1357,7 @@ function renderAgentsGrid(filter = 'all') {
                     <div class="agent-identifiers" style="max-width: 85%;">
                         <div class="agent-codename-container" style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
                             <h4 class="agent-codename" title="${agent.name}" style="flex-grow: 1; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${agent.name}</h4>
+                            ${simBadgeHtml}
                             <button class="btn-rename" onclick="renameAgent('${agent.id}')" title="이름 변경" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px; display: inline-flex; align-items: center; justify-content: center; transition: color var(--transition-fast); flex-shrink: 0;">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 13px; height: 13px;">
                                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>

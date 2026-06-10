@@ -585,6 +585,12 @@ body {
     background: rgba(255, 51, 102, 0.05);
 }
 
+.action-btn.btn-export:hover {
+    color: var(--accent-emerald);
+    border-color: var(--accent-emerald-glow);
+    background: rgba(5, 255, 161, 0.05);
+}
+
 /* Sidebar Styling */
 .workspace-sidebar {
     display: flex;

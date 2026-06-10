@@ -85,6 +85,8 @@ def main():
                     raise AssertionError("Verification failed: 'webhookUrlInput' textbox not found in response HTML")
                 if "webhookTestBtn" not in html:
                     raise AssertionError("Verification failed: 'webhookTestBtn' button not found in response HTML")
+                if "exportAllBtn" not in html:
+                    raise AssertionError("Verification failed: 'exportAllBtn' button not found in response HTML")
                 
                 # Verify dynamic assets in app.js
                 app_js_url = f"http://localhost:{TEST_PORT}/app.js"
@@ -95,6 +97,10 @@ def main():
                         raise AssertionError("Verification failed: 'btn-history' template not found in app.js")
                     if "history_drawer_" not in js_code:
                         raise AssertionError("Verification failed: 'history_drawer_' template not found in app.js")
+                    if "exportAgentToCSV" not in js_code:
+                        raise AssertionError("Verification failed: 'exportAgentToCSV' function not found in app.js")
+                    if "exportAllAgentsToCSV" not in js_code:
+                        raise AssertionError("Verification failed: 'exportAllAgentsToCSV' function not found in app.js")
                 
                 print("Content verification succeeded!")
                 passed = True

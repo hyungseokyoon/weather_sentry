@@ -30,11 +30,17 @@ let simulatedWeather = {
     waveHeight: 1.0
 };
 
+// Notifications & Webhook state
+let isPushEnabled = false;
+let webhookUrl = '';
+let activeAlerts = {};
+
 // Initialize the Application
 document.addEventListener('DOMContentLoaded', () => {
     loadState();
     setupEventListeners();
     setupSimulator();
+    setupNotifications();
     renderAll();
     
     addLog('SYSTEM', 'NimbusShield core telemetry online. Fetching weather systems...', 'system-line');
@@ -51,6 +57,8 @@ document.addEventListener('DOMContentLoaded', () => {
 function loadState() {
     const savedAgents = localStorage.getItem('ns_agents');
     const savedLogs = localStorage.getItem('ns_logs');
+    const savedPush = localStorage.getItem('ns_push_enabled');
+    const savedWebhook = localStorage.getItem('ns_webhook_url');
     
     if (savedAgents) {
         state.agents = JSON.parse(savedAgents);
@@ -60,12 +68,20 @@ function loadState() {
     } else {
         state.logs = [`[SYSTEM] Terminal initialized. Waiting for agent deployment...`];
     }
+    if (savedPush) {
+        isPushEnabled = JSON.parse(savedPush);
+    }
+    if (savedWebhook) {
+        webhookUrl = savedWebhook;
+    }
 }
 
 // Save state to localStorage
 function saveState() {
     localStorage.setItem('ns_agents', JSON.stringify(state.agents));
     localStorage.setItem('ns_logs', JSON.stringify(state.logs));
+    localStorage.setItem('ns_push_enabled', JSON.stringify(isPushEnabled));
+    localStorage.setItem('ns_webhook_url', webhookUrl);
 }
 
 // Setup all DOM event listeners
@@ -536,6 +552,7 @@ async function syncAgentWeather(agent) {
         
         saveState();
         renderAll();
+        checkWeatherAlerts(agent);
     } catch (error) {
         console.error(`Error syncing agent ${agent.name}:`, error);
         agent.isError = true;
@@ -796,6 +813,9 @@ function setupSimulator() {
         }
         renderAll();
         
+        // Check alerts on state transition
+        state.agents.forEach(a => checkWeatherAlerts(a));
+        
         // Also refresh any open charts
         Object.keys(charts).forEach(agentId => {
             renderAgentChart(agentId);
@@ -808,6 +828,7 @@ function setupSimulator() {
         if (isSimulationMode) {
             addLog('SIMULATOR', `Simulation target changed to: ${simTargetAgentId === 'all' ? 'All Deployed Agents' : 'Agent ' + state.agents.find(a => a.id === simTargetAgentId)?.name}`, 'system-line');
             renderAll();
+            state.agents.forEach(a => checkWeatherAlerts(a));
             Object.keys(charts).forEach(agentId => {
                 renderAgentChart(agentId);
             });
@@ -820,6 +841,12 @@ function setupSimulator() {
             updateSimValues();
             if (isSimulationMode) {
                 renderAll();
+                // Check alerts for affected agents
+                state.agents.forEach(a => {
+                    if (simTargetAgentId === 'all' || simTargetAgentId === a.id) {
+                        checkWeatherAlerts(a);
+                    }
+                });
                 // If the target has an open chart, re-render the chart dynamically!
                 Object.keys(charts).forEach(agentId => {
                     if (simTargetAgentId === 'all' || simTargetAgentId === agentId) {
@@ -852,6 +879,9 @@ function setupSimulator() {
         addLog('SIMULATOR', 'Simulator settings reset to default values.', 'system-line');
         renderAll();
         
+        // Re-evaluate alerts to resolve simulated alerts
+        state.agents.forEach(a => checkWeatherAlerts(a));
+        
         // Refresh charts
         Object.keys(charts).forEach(agentId => {
             renderAgentChart(agentId);
@@ -879,6 +909,222 @@ function updateSimulatorTargets() {
             opt.selected = true;
         }
         simTargetSelect.appendChild(opt);
+    });
+}
+
+// Setup Browser Notifications and Webhook Controls
+function setupNotifications() {
+    const pushToggle = document.getElementById('pushToggle');
+    const webhookUrlInput = document.getElementById('webhookUrlInput');
+    const webhookTestBtn = document.getElementById('webhookTestBtn');
+    
+    // Set initial values
+    if (pushToggle) {
+        pushToggle.checked = isPushEnabled;
+        updatePushStatusLabel();
+    }
+    if (webhookUrlInput) {
+        webhookUrlInput.value = webhookUrl;
+    }
+    
+    // Toggle push notifications
+    if (pushToggle) {
+        pushToggle.addEventListener('change', async (e) => {
+            isPushEnabled = e.target.checked;
+            if (isPushEnabled) {
+                if (!("Notification" in window)) {
+                    alert("이 브라우저는 웹 푸시 알림을 지원하지 않습니다.");
+                    pushToggle.checked = false;
+                    isPushEnabled = false;
+                } else if (Notification.permission === "default") {
+                    const permission = await Notification.requestPermission();
+                    if (permission !== "granted") {
+                        pushToggle.checked = false;
+                        isPushEnabled = false;
+                        addLog('SYSTEM', '웹 알림 권한이 거부되었습니다.', 'warning-line');
+                    } else {
+                        addLog('SYSTEM', '웹 알림 권한이 허용되었습니다.', 'system-line');
+                        sendBrowserNotification("NimbusShield", "알림 서비스가 정상 활성화되었습니다.");
+                    }
+                } else if (Notification.permission === "denied") {
+                    alert("알림 권한이 거부되어 있습니다. 브라우저 설정에서 알림 권한을 승인해주세요.");
+                    pushToggle.checked = false;
+                    isPushEnabled = false;
+                } else {
+                    addLog('SYSTEM', '웹 알림 서비스가 활성화되었습니다.', 'system-line');
+                    sendBrowserNotification("NimbusShield", "알림 서비스가 정상 활성화되었습니다.");
+                }
+            } else {
+                addLog('SYSTEM', '웹 알림 서비스가 비활성화되었습니다.', 'system-line');
+            }
+            updatePushStatusLabel();
+            saveState();
+        });
+    }
+    
+    // Webhook URL input change
+    if (webhookUrlInput) {
+        webhookUrlInput.addEventListener('input', (e) => {
+            webhookUrl = e.target.value.trim();
+            saveState();
+        });
+    }
+    
+    // Webhook test send button
+    if (webhookTestBtn) {
+        webhookTestBtn.addEventListener('click', async () => {
+            if (!webhookUrl) {
+                alert("웹훅 수신 URL을 먼저 입력해주세요.");
+                return;
+            }
+            
+            webhookTestBtn.disabled = true;
+            webhookTestBtn.textContent = "Sending...";
+            
+            const success = await sendWebhookNotification(`🚨 *[NimbusShield]* Webhook 테스트 전송 성공! (Location: Command Center)`);
+            
+            webhookTestBtn.disabled = false;
+            webhookTestBtn.textContent = "Test Send";
+            
+            if (success) {
+                addLog('SYSTEM', '테스트 웹훅 메시지를 성공적으로 발송했습니다.', 'system-line');
+                alert("테스트 웹훅 메시지가 성공적으로 발송되었습니다!");
+            } else {
+                addLog('SYSTEM', '테스트 웹훅 발송 실패. URL을 확인해 주세요.', 'error-line');
+                alert("테스트 웹훅 발송에 실패했습니다. 올바른 URL인지 확인해주세요.");
+            }
+        });
+    }
+}
+
+// Update push permission status label text
+function updatePushStatusLabel() {
+    const pushStatus = document.getElementById('pushStatus');
+    if (!pushStatus) return;
+    
+    if (!("Notification" in window)) {
+        pushStatus.textContent = "Not Supported";
+        pushStatus.style.color = "var(--accent-danger)";
+    } else if (Notification.permission === "granted") {
+        pushStatus.textContent = isPushEnabled ? "Active" : "Granted";
+        pushStatus.style.color = isPushEnabled ? "var(--accent-emerald)" : "var(--text-secondary)";
+    } else if (Notification.permission === "denied") {
+        pushStatus.textContent = "Blocked";
+        pushStatus.style.color = "var(--accent-danger)";
+    } else {
+        pushStatus.textContent = isPushEnabled ? "Active" : "Default";
+        pushStatus.style.color = "var(--text-muted)";
+    }
+}
+
+// Send browser HTML5 notification
+function sendBrowserNotification(title, body) {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+        try {
+            new Notification(title, {
+                body: body,
+                icon: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png"
+            });
+        } catch (e) {
+            console.error("Failed to trigger Notification", e);
+        }
+    }
+}
+
+// Send Slack/Discord compatible Webhook payload
+async function sendWebhookNotification(message) {
+    if (!webhookUrl) return false;
+    try {
+        const payload = {
+            text: message,
+            content: message
+        };
+        const res = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        return res.ok;
+    } catch (e) {
+        console.error("Webhook fetch failed", e);
+        return false;
+    }
+}
+
+// Evaluate warnings for a target agent
+function checkWeatherAlerts(agent) {
+    const weather = getAgentDisplayWeather(agent);
+    if (!weather || weather.tempMin === null || weather.tempMin === undefined) return;
+    
+    // Only verify warnings for active agents
+    if (!agent.isActive) return;
+    
+    const warnings = [];
+    
+    if (weather.tempMax >= 35.0) {
+        warnings.push({ type: 'Heatwave', label: 'Heatwave (폭염 경보)', msg: `🌡️ Air Temperature reached ${weather.tempMax}°C` });
+    }
+    if (weather.tempMin <= -12.0) {
+        warnings.push({ type: 'Coldwave', label: 'Coldwave (한파 경보)', msg: `🥶 Air Temperature fell to ${weather.tempMin}°C` });
+    }
+    if (weather.wind >= 12.0) {
+        warnings.push({ type: 'StrongWind', label: 'Strong Wind (강풍 경보)', msg: `💨 Wind Speed reached ${weather.wind} m/s` });
+    }
+    if (weather.rain >= 20.0) {
+        warnings.push({ type: 'HeavyRain', label: 'Heavy Rain (호우 경보)', msg: `🌧️ Daily Rain Sum reached ${weather.rain} mm` });
+    }
+    if (weather.waveHeight !== null && weather.waveHeight !== undefined && weather.waveHeight >= 3.0) {
+        warnings.push({ type: 'HighWaves', label: 'High Waves (풍랑 경보)', msg: `🌊 Wave Height reached ${weather.waveHeight} m` });
+    }
+    
+    const activeTypes = new Set(warnings.map(w => w.type));
+    
+    // Dispatch new alerts
+    warnings.forEach(w => {
+        const alertKey = `${agent.id}_${w.type}`;
+        if (!activeAlerts[alertKey]) {
+            activeAlerts[alertKey] = true;
+            
+            const logMsg = `[ALERT] ${agent.name}: ${w.label} - ${w.msg}`;
+            addLog(agent.name, logMsg, 'error-line');
+            
+            if (isPushEnabled) {
+                sendBrowserNotification(`🚨 NimbusShield: ${agent.name}`, `${w.label}\n${w.msg}`);
+            }
+            if (webhookUrl) {
+                sendWebhookNotification(`🚨 *[NimbusShield Alert]* **${agent.name}** (${agent.locationName})\n**${w.label}**\n${w.msg}`);
+            }
+        }
+    });
+    
+    // Clean up resolved alerts
+    Object.keys(activeAlerts).forEach(alertKey => {
+        if (alertKey.startsWith(agent.id + '_')) {
+            const type = alertKey.replace(agent.id + '_', '');
+            if (!activeTypes.has(type)) {
+                delete activeAlerts[alertKey];
+                
+                let resolvedLabel = '';
+                if (type === 'Heatwave') resolvedLabel = 'Heatwave (폭염 경보) 해제';
+                if (type === 'Coldwave') resolvedLabel = 'Coldwave (한파 경보) 해제';
+                if (type === 'StrongWind') resolvedLabel = 'Strong Wind (강풍 경보) 해제';
+                if (type === 'HeavyRain') resolvedLabel = 'Heavy Rain (호우 경보) 해제';
+                if (type === 'HighWaves') resolvedLabel = 'High Waves (풍랑 경보) 해제';
+                
+                const logMsg = `[RESOLVED] ${agent.name}: ${resolvedLabel}`;
+                addLog(agent.name, logMsg, 'check-line');
+                
+                if (isPushEnabled) {
+                    sendBrowserNotification(`🟢 NimbusShield: ${agent.name} Resolved`, resolvedLabel);
+                }
+                if (webhookUrl) {
+                    sendWebhookNotification(`🟢 *[NimbusShield Resolved]* **${agent.name}**\n${resolvedLabel}`);
+                }
+            }
+        }
     });
 }
 

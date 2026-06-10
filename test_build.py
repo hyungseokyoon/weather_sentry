@@ -78,6 +78,14 @@ def main():
                 if "simTempMin" not in html:
                     raise AssertionError("Verification failed: 'simTempMin' slider not found in response HTML")
                 
+                # Check for alerts & integration interface elements
+                if "pushToggle" not in html:
+                    raise AssertionError("Verification failed: 'pushToggle' checkbox not found in response HTML")
+                if "webhookUrlInput" not in html:
+                    raise AssertionError("Verification failed: 'webhookUrlInput' textbox not found in response HTML")
+                if "webhookTestBtn" not in html:
+                    raise AssertionError("Verification failed: 'webhookTestBtn' button not found in response HTML")
+                
                 print("Content verification succeeded!")
                 passed = True
                 

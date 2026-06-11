@@ -42,6 +42,13 @@
                     </svg>
                     Export All
                 </button>
+                <button id="globalHistoryCompareBtn" class="btn btn-secondary flex-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 14px; height: 14px;">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    Compare with History
+                </button>
                 <button id="globalSyncBtn" class="btn btn-secondary flex-btn">
                     <svg class="icon-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
@@ -327,6 +334,45 @@
                     <button type="submit" id="submitAgentBtn" class="btn btn-primary" disabled>Deploy Agent</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Modal: Global Historical Comparison -->
+    <div id="globalHistoryModal" class="modal-overlay">
+        <div class="modal-card" style="max-width: 800px; width: 90%; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h3>Compare All Points with Previous Year</h3>
+                <button id="closeGlobalHistoryModalBtn" class="btn-close">&times;</button>
+            </div>
+            <div style="padding: 20px 24px; overflow-y: auto; flex-grow: 1;">
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;">
+                    <div style="display: flex; flex-direction: column; gap: 4px; flex-grow: 1;">
+                        <label for="globalHistoryYearSelect" class="form-label">Select Year Offset</label>
+                        <select id="globalHistoryYearSelect" class="form-select" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; outline: none; width: 100%;">
+                            <option value="1">1 Year Ago (1년 전 동일 날짜)</option>
+                            <option value="2">2 Years Ago (2년 전 동일 날짜)</option>
+                            <option value="3">3 Years Ago (3년 전 동일 날짜)</option>
+                        </select>
+                    </div>
+                    <button type="button" id="compareAllHistoryBtn" class="btn btn-primary" style="align-self: flex-end; height: 38px;">Compare All</button>
+                </div>
+                
+                <div id="globalHistoryProgress" class="hidden" style="margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 6px;">
+                        <span>Fetching historical records...</span>
+                        <span id="globalHistoryProgressText">0%</span>
+                    </div>
+                    <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; border: 1px solid var(--border-color);">
+                        <div id="globalHistoryProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent-pink), var(--accent-warning)); transition: width 0.2s ease;"></div>
+                    </div>
+                </div>
+
+                <div id="globalHistoryTableContainer" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(5,7,12,0.2); max-height: 450px;">
+                    <div style="color: var(--text-muted); text-align: center; padding: 40px; font-size: 0.8rem;">
+                        Select a year offset and click "Compare All" to run the comparison across all deployed agents.
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

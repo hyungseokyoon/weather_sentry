@@ -192,6 +192,38 @@ function setupEventListeners() {
         
         manualForm.classList.add('hidden');
     });
+
+    // Global Historical Comparison Modal listeners
+    const globalHistoryModal = document.getElementById('globalHistoryModal');
+    const globalHistoryBtn = document.getElementById('globalHistoryCompareBtn');
+    const closeGlobalHistoryBtn = document.getElementById('closeGlobalHistoryModalBtn');
+    const compareAllBtn = document.getElementById('compareAllHistoryBtn');
+
+    if (globalHistoryBtn) {
+        globalHistoryBtn.addEventListener('click', () => {
+            const container = document.getElementById('globalHistoryTableContainer');
+            if (container) {
+                container.innerHTML = `
+                    <div style="color: var(--text-muted); text-align: center; padding: 40px; font-size: 0.8rem;">
+                        Select a year offset and click "Compare All" to run the comparison across all deployed agents.
+                    </div>
+                `;
+            }
+            const progressDiv = document.getElementById('globalHistoryProgress');
+            if (progressDiv) progressDiv.classList.add('hidden');
+            globalHistoryModal.classList.add('active');
+        });
+    }
+
+    if (closeGlobalHistoryBtn) {
+        closeGlobalHistoryBtn.addEventListener('click', () => {
+            globalHistoryModal.classList.remove('active');
+        });
+    }
+
+    if (compareAllBtn) {
+        compareAllBtn.addEventListener('click', compareAllAgentsWithHistory);
+    }
 }
 
 // Reset/Clear Create Modal Form
@@ -1325,6 +1357,220 @@ function displayHistoryComparison(agent, yearOffset, pastYear) {
             </div>
         </div>
     `;
+}
+
+// Compare all active agents with historical archive data for the selected offset
+async function compareAllAgentsWithHistory() {
+    const select = document.getElementById('globalHistoryYearSelect');
+    const container = document.getElementById('globalHistoryTableContainer');
+    const progressDiv = document.getElementById('globalHistoryProgress');
+    const progressBar = document.getElementById('globalHistoryProgressBar');
+    const progressText = document.getElementById('globalHistoryProgressText');
+    const compareBtn = document.getElementById('compareAllHistoryBtn');
+    
+    if (!select || !container || !progressDiv || !progressBar || !progressText || !compareBtn) return;
+    
+    const yearOffset = parseInt(select.value);
+    const activeAgents = state.agents;
+    
+    if (activeAgents.length === 0) {
+        container.innerHTML = `
+            <div style="color: var(--accent-danger); text-align: center; padding: 40px; font-size: 0.8rem; font-weight: 500;">
+                ⚠️ Deployed agents not found. Please deploy at least one weather agent.
+            </div>
+        `;
+        return;
+    }
+    
+    compareBtn.disabled = true;
+    progressDiv.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+    container.innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 160px; width: 100%;">
+            <svg class="icon-sync spinning" viewBox="0 0 24 24" fill="none" stroke="var(--accent-pink)" stroke-width="2" style="width: 24px; height: 24px;">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+            </svg>
+            <span style="color: var(--text-secondary); font-size: 0.8rem;">Querying historical climate systems...</span>
+        </div>
+    `;
+    
+    let completedCount = 0;
+    const totalCount = activeAgents.length;
+    
+    const fetchHistoryForAgent = async (agent) => {
+        const targetDateStr = agent.targetDate;
+        const parts = targetDateStr.split('-');
+        if (parts.length !== 3) return null;
+        
+        const targetYear = parseInt(parts[0]);
+        const month = parts[1];
+        const day = parts[2];
+        const pastYear = targetYear - yearOffset;
+        const pastDateStr = `${pastYear}-${month}-${day}`;
+        
+        if (!agent.history) agent.history = {};
+        
+        if (agent.history[yearOffset] && agent.history[yearOffset].date === pastDateStr) {
+            completedCount++;
+            const pct = Math.round((completedCount / totalCount) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressText.textContent = `${pct}%`;
+            return agent.history[yearOffset];
+        }
+        
+        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${agent.latitude}&longitude=${agent.longitude}&start_date=${pastDateStr}&end_date=${pastDateStr}&daily=temperature_2m_max,temperature_2m_min,rain_sum,wind_speed_10m_max&timezone=auto&wind_speed_unit=ms`;
+        
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+            const data = await res.json();
+            
+            let tempMax = null;
+            let tempMin = null;
+            let wind = null;
+            let rain = null;
+            
+            if (data.daily && data.daily.time && data.daily.time.length > 0) {
+                tempMax = data.daily.temperature_2m_max[0];
+                tempMin = data.daily.temperature_2m_min[0];
+                wind = data.daily.wind_speed_10m_max[0];
+                rain = data.daily.rain_sum[0];
+            }
+            
+            agent.history[yearOffset] = {
+                date: pastDateStr,
+                tempMax,
+                tempMin,
+                wind,
+                rain
+            };
+            
+            completedCount++;
+            const pct = Math.round((completedCount / totalCount) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressText.textContent = `${pct}%`;
+            return agent.history[yearOffset];
+        } catch (e) {
+            console.error(`Failed to fetch history for agent ${agent.id}`, e);
+            completedCount++;
+            const pct = Math.round((completedCount / totalCount) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressText.textContent = `${pct}%`;
+            return null;
+        }
+    };
+    
+    await Promise.all(activeAgents.map(agent => fetchHistoryForAgent(agent)));
+    saveState();
+    
+    let tableHtml = `
+        <table class="global-history-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.78rem;">
+            <thead>
+                <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-primary); background: rgba(255,255,255,0.02);">
+                    <th style="padding: 12px 14px; font-weight: 600;">Agent / Location</th>
+                    <th style="padding: 12px 14px; font-weight: 600;">Dates Compared</th>
+                    <th style="padding: 12px 14px; font-weight: 600; text-align: center;">Max Temp (Delta)</th>
+                    <th style="padding: 12px 14px; font-weight: 600; text-align: center;">Min Temp (Delta)</th>
+                    <th style="padding: 12px 14px; font-weight: 600; text-align: center;">Max Wind (Delta)</th>
+                    <th style="padding: 12px 14px; font-weight: 600; text-align: center;">Rain Sum (Delta)</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+    
+    activeAgents.forEach(agent => {
+        const past = agent.history ? agent.history[yearOffset] : null;
+        const current = getAgentDisplayWeather(agent);
+        
+        const targetDateStr = agent.targetDate;
+        const parts = targetDateStr.split('-');
+        const targetYear = parseInt(parts[0]);
+        const month = parts[1];
+        const day = parts[2];
+        const pastYear = targetYear - yearOffset;
+        
+        const formatBadge = (currVal, pastVal, type) => {
+            if (currVal === null || currVal === undefined || pastVal === null || pastVal === undefined) {
+                return `<span class="delta-badge neutral">--</span>`;
+            }
+            const delta = currVal - pastVal;
+            const sign = delta > 0 ? '+' : '';
+            
+            if (type === 'temp') {
+                if (Math.abs(delta) < 0.2) return `<span class="delta-badge neutral">~0.0°C</span>`;
+                if (delta > 0) return `<span class="delta-badge warmer">▲ ${sign}${delta.toFixed(1)}°C</span>`;
+                return `<span class="delta-badge colder">▼ ${delta.toFixed(1)}°C</span>`;
+            } else if (type === 'wind') {
+                if (Math.abs(delta) < 0.2) return `<span class="delta-badge neutral">~0.0 m/s</span>`;
+                if (delta > 0) return `<span class="delta-badge warmer">▲ ${sign}${delta.toFixed(1)} m/s</span>`;
+                return `<span class="delta-badge colder">▼ ${delta.toFixed(1)} m/s</span>`;
+            } else if (type === 'rain') {
+                if (Math.abs(delta) < 0.1) return `<span class="delta-badge neutral">~0.0 mm</span>`;
+                if (delta > 0) return `<span class="delta-badge warmer">▲ ${sign}${delta.toFixed(1)} mm</span>`;
+                return `<span class="delta-badge colder">▼ ${delta.toFixed(1)} mm</span>`;
+            }
+            return '';
+        };
+        
+        const formatVal = (val, unit) => val !== null && val !== undefined ? `${val.toFixed(1)}${unit}` : '--';
+        
+        const locName = agent.locationName || 'Unknown Location';
+        const codeName = agent.name || 'Unnamed Agent';
+        
+        if (!past || past.tempMax === null || past.tempMin === null) {
+            tableHtml += `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    <td style="padding: 12px 14px;">
+                        <div style="font-weight: 500; color: var(--text-primary);">${codeName}</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted);">${locName}</div>
+                    </td>
+                    <td style="padding: 12px 14px; font-size: 0.72rem; color: var(--text-muted);">${targetDateStr} vs ${pastYear}-${month}-${day}</td>
+                    <td colspan="4" style="padding: 12px 14px; text-align: center; color: var(--text-muted); font-size: 0.72rem;">⚠️ No historical records found for this coordinate</td>
+                </tr>
+            `;
+        } else {
+            tableHtml += `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); transition: background-color 0.15s ease;">
+                    <td style="padding: 12px 14px;">
+                        <div style="font-weight: 500; color: var(--text-primary);">${codeName}</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted);">${locName}</div>
+                    </td>
+                    <td style="padding: 12px 14px; font-size: 0.72rem; color: var(--text-secondary);">
+                        <div>F: ${targetDateStr}</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted);">H: ${pastYear}-${month}-${day}</div>
+                    </td>
+                    <td style="padding: 12px 14px; text-align: center;">
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">${formatVal(current.tempMax, '°')} <span style="color: var(--text-muted); font-size: 0.68rem;">/ ${formatVal(past.tempMax, '°')}</span></div>
+                        <div style="margin-top: 3px;">${formatBadge(current.tempMax, past.tempMax, 'temp')}</div>
+                    </td>
+                    <td style="padding: 12px 14px; text-align: center;">
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">${formatVal(current.tempMin, '°')} <span style="color: var(--text-muted); font-size: 0.68rem;">/ ${formatVal(past.tempMin, '°')}</span></div>
+                        <div style="margin-top: 3px;">${formatBadge(current.tempMin, past.tempMin, 'temp')}</div>
+                    </td>
+                    <td style="padding: 12px 14px; text-align: center;">
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">${formatVal(current.windSpeedMax, ' m/s')} <span style="color: var(--text-muted); font-size: 0.68rem;">/ ${formatVal(past.wind, '')}</span></div>
+                        <div style="margin-top: 3px;">${formatBadge(current.windSpeedMax, past.wind, 'wind')}</div>
+                    </td>
+                    <td style="padding: 12px 14px; text-align: center;">
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">${formatVal(current.rainSum, ' mm')} <span style="color: var(--text-muted); font-size: 0.68rem;">/ ${formatVal(past.rain, '')}</span></div>
+                        <div style="margin-top: 3px;">${formatBadge(current.rainSum, past.rain, 'rain')}</div>
+                    </td>
+                </tr>
+            `;
+        }
+    });
+    
+    tableHtml += `
+            </tbody>
+        </table>
+    `;
+    
+    container.innerHTML = tableHtml;
+    compareBtn.disabled = false;
+    setTimeout(() => {
+        progressDiv.classList.add('hidden');
+    }, 1200);
 }
 
 // Convert degree angle to cardinal direction (N, NE, E, etc.)

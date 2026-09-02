@@ -35,9 +35,12 @@ python3 -m http.server 8080
 
 ## 📁 프로젝트 파일 구성
 
-* [index.html](file:///Users/ddukddi/Documents/programming/git/weather_tracker/index.html) — 구조 및 레이아웃, 모달 폼, SVG 아이콘 모음.
-* [style.css](file:///Users/ddukddi/Documents/programming/git/weather_tracker/style.css) — 글래스모피즘 다크 모드 테마 및 애니메이션 스타일링.
-* [app.js](file:///Users/ddukddi/Documents/programming/git/weather_tracker/app.js) — Geocoding 국내 검색 및 기상/해양 API 연동, 수동 좌표 파싱, 30분 단위 자동 스위핑 스케줄러, 개별/전체 동기화 핵심 로직.
+* [index.html](./index.html) — 구조 및 레이아웃, 모달 폼, SVG 아이콘 모음.
+* [style.css](./style.css) — 글래스모피즘 다크 모드 테마 및 애니메이션 스타일링.
+* [app.js](./app.js) — Geocoding 국내 검색 및 기상/해양 API 연동, 수동 좌표 파싱, 30분 단위 자동 스위핑 스케줄러, 개별/전체 동기화 핵심 로직.
+* [Dockerfile](./Dockerfile) — Nginx Alpine 기반 정적 배포 이미지 정의 (6543 포트 노출).
+* [default.conf](./default.conf) — 6543 포트 수신용 커스텀 Nginx 서버 설정. (이미지 빌드 시 함께 복사되므로 저장소 루트에서 빌드해야 합니다)
+* [test_build.py](./test_build.py) — 도커 빌드 및 배포 무결성을 검증하는 통합 테스트 스크립트.
 
 ---
 
@@ -83,7 +86,17 @@ python3 -m http.server 8080
 ### 8. 에이전트 코네임 이름 변경 (Rename)
 * 카드 상단의 편집 아이콘을 누르면 에이전트의 코네임을 즉시 변경할 수 있어 효율적인 에이전트 관리가 가능합니다.
 
-### 9. 30분 단위 자동 동기화 및 실시간 수동 동기화
+### 9. 🗺️ 그리드 / 지도 듀얼 뷰 (Leaflet Map View)
+* 에이전트 목록 상단의 `Grid` / `Map` 토글로 카드 그리드와 지도 뷰를 전환합니다. 지도는 최초 전환 시점에 지연 초기화(Lazy init)되어 초기 로딩 비용을 발생시키지 않습니다.
+* CartoDB Dark Matter 타일을 사용해 대시보드의 다크 테마와 톤을 맞췄으며, 각 에이전트는 상태에 따른 원형 마커로 표시되고 팝업에서 기온(최저~최고), 풍속, 강수량을 바로 확인할 수 있습니다.
+* `All / Active / Paused` 필터와 연동되어, 현재 필터에 해당하는 에이전트만 마커로 그려지고 지도 배율도 해당 지점들에 맞춰 자동으로 맞춰집니다(fit bounds).
+
+### 10. 📤 CSV 기상 리포트 내보내기 (Weather Report Export)
+* **개별 에이전트 상세 리포트**: 카드의 내보내기 아이콘을 클릭하면 해당 에이전트의 메타데이터(ID, 코드네임, 좌표, 대상 날짜, 상태, 마지막 동기화), 현재 예보 수치, 해양 텔레메트리, 과거 기상 비교 기록, 24시간 시간별 예보가 섹션별로 구분된 CSV 파일(`nimbusshield_report_<코드네임>_<날짜>.csv`)로 저장됩니다.
+* **전체 요약 리포트**: 헤더의 `Export All` 버튼으로 배포된 모든 에이전트의 핵심 지표를 한 행씩 담은 요약 CSV(`nimbusshield_all_agents_<오늘날짜>.csv`)를 내려받습니다.
+* **Excel 한글 호환**: 파일 선두에 UTF-8 BOM을 삽입해 Excel에서 한글이 깨지지 않으며, 쉼표·따옴표가 포함된 지역명·코드네임은 자동으로 이스케이프 처리됩니다.
+
+### 11. 30분 단위 자동 동기화 및 실시간 수동 동기화
 * **자동 동기화**: 30분(1,800,000ms)마다 모든 활성 에이전트의 날씨 데이터를 자동으로 백그라운드 스위핑하여 갱신합니다.
 * **수동 동기화**:
   * **전체 동기화**: 헤더의 `Sync Agents` 버튼을 통해 구동 중인 모든 활성 에이전트 갱신.

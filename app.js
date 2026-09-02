@@ -6,6 +6,16 @@ let state = {
     logs: []
 };
 
+// South Korea service boundary — this dashboard is a domestic-only service,
+// so manual coordinates outside this box are rejected.
+const KR_BOUNDS = { latMin: 33, latMax: 39, lngMin: 124, lngMax: 132 };
+const KR_BOUNDS_ALERT = '대한민국 전용 서비스입니다. 위도 33~39, 경도 124~132 범위 내의 좌표만 등록할 수 있습니다. (예: 37.217, 126.275)';
+
+function isWithinKoreaBounds(lat, lng) {
+    return lat >= KR_BOUNDS.latMin && lat <= KR_BOUNDS.latMax &&
+           lng >= KR_BOUNDS.lngMin && lng <= KR_BOUNDS.lngMax;
+}
+
 // Periodic checker interval (every 30 minutes)
 let syncInterval = null;
 const SYNC_FREQUENCY_MS = 1800000; // 30 minutes
@@ -177,10 +187,9 @@ function setupEventListeners() {
             return;
         }
         
-        if (lat < 33 || lat > 39 || lng < 124 || lng > 132) {
-            if (!confirm('입력하신 좌표가 대한민국 경계(위도 33~39, 경도 124~132)를 벗어납니다. 그대로 진행하시겠습니까?')) {
-                return;
-            }
+        if (!isWithinKoreaBounds(lat, lng)) {
+            alert(KR_BOUNDS_ALERT);
+            return;
         }
         
         selectLocation({
@@ -378,6 +387,10 @@ function handleFormSubmit(e) {
             const latVal = parseFloat(parts[0].trim());
             const lngVal = parseFloat(parts[1].trim());
             if (!isNaN(latVal) && !isNaN(lngVal)) {
+                if (!isWithinKoreaBounds(latVal, lngVal)) {
+                    alert(KR_BOUNDS_ALERT);
+                    return;
+                }
                 const nameVal = document.getElementById('manualLocName').value.trim() || 'Custom Location';
                 document.getElementById('selectedLat').value = latVal;
                 document.getElementById('selectedLng').value = lngVal;
